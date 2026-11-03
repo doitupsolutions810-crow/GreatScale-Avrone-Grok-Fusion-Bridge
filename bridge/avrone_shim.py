@@ -38,7 +38,7 @@ def post_blackboard():
     if len(BLACKBOARD) > 500:
         del BLACKBOARD[:-500]
     return Response(json.dumps({"posted": True, "id": entry["id"]}),
-                    mitype="application/json", status=200)
+                    mimetype="application/json", status=200)
 
 
 @app.route("/health")
