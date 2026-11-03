@@ -1,12 +1,14 @@
 {
   "ok": true,
-  "checks_passed": 21,
+  "checks_passed": 23,
   "checks": [
     "relay_mode_without_synthetic_heartbeat",
     "actual_ws_publish",
     "invalid_frame_preserves_ws_subscription",
     "blackboard_missing_auth",
     "event_missing_auth",
+    "actual_swarm_chat_requires_operator",
+    "actual_missing_swarm_trust_fails_closed",
     "blackboard_body_cap_before_auth",
     "events_body_cap_before_auth",
     "blackboard_finding_accepted",
@@ -26,21 +28,25 @@
   ],
   "relay_cycles": 50,
   "test_feed": "explicit metrics, no synthetic heartbeat",
-  "avrone_local_revision": "8b96f38a0dee287047947b2fd294933563b2a209",
+  "avrone_local_revision": "d2240a65ccf5da60bb36e5483d39001e49754f45",
   "avrone_git": {
-    "revision": "8b96f38a0dee287047947b2fd294933563b2a209",
-    "tree": "fcb842defa24154ddd87b6f1db000ad29f1975f9",
+    "revision": "d2240a65ccf5da60bb36e5483d39001e49754f45",
+    "tree": "d84786eef00fc95ed8e02cc9779de27c12bdebb6",
     "changed_files": [
-      "?? .coverage.1872bc074efe.pid21.XJyltrKx.HAyjOedepqBh",
-      "?? .coverage.1872bc074efe.pid25.XurMuXZx.HKnKZHssbShh",
-      "?? .coverage.1872bc074efe.pid28.XAjMx22x.HuZz95SF8LVh",
-      "?? .coverage.1872bc074efe.pid6.XszZ4Stx.HW68krhzg7Wh"
+      "?? .coverage.1872bc074efe.pid21.Xv2ZuzDx.HxqSIh8ZO3gh",
+      "?? .coverage.1872bc074efe.pid24.Xfu2Rt5x.HwX6YUORK8Dh",
+      "?? .coverage.1872bc074efe.pid27.XPBBf4Wx.HIXUpZHmyLWh",
+      "?? .coverage.1872bc074efe.pid6.XNrKFAHx.HMpcdigcU7Mh"
     ]
   },
   "source_sha256": {
     "avrone/server.py": "03a620dda6d935cf69d3ab88245559f77f58a29d8ce26f3acafc86cf3a82fd39",
     "avrone/bridge.py": "60ab1b957a279bdd665a0287df105e828bf2d8ef5bba5f0fbbefcf4674918d80",
     "avrone/greatscale.py": "ca8bd9e7ec10a60a672ae8886676431ba4728d812171fa31c00925a587f7687c",
+    "avrone/trinity.py": "d6b8d45dfc5bce42585ba0e933df3255e0bb54b3a2df97e53cb54a6a33803ad8",
+    "avrone/swarm_client.py": "650298ee15bf0dce4365c4979369042df65f38c6063f14200b2080a288969c1c",
+    "avrone/swarm_outbox.py": "afc52a51b09b4d18c833a4058ed8a3032c94ce6ba7614970d70ced04fab42d09",
+    "avrone/swarm_runtime.py": "4d0677105ed900b4bbfa0edc890d9e0c447cc545050aa1951ce89000ded72495",
     "cycle/src/bridge/main.py": "c654c595334df986247f5add2ab4513a7768d3a6e55aa8fc73ff6fc381d905d1",
     "cycle/src/bridge/traits.py": "8b6e9519fdad9ca00792fc4ff237ea11fc486d564e2865e4bee2d893f9e88f28",
     "cycle/src/bridge/ns_fusion.py": "77b158c8a43ed77e0c888c9ea9244b36ad72380cb2fa549903def4ffa6334076",
@@ -144,6 +150,6 @@
       "reconciled": 1
     }
   ],
-  "published_avrone_runtime": "dd1e7258d38b4f0ab7e9d2dbddb31f037ea9f1e5",
+  "published_avrone_runtime": "7ed83cc4dd7c238377a24b95cb20e29000e72efe",
   "published_cycle_runtime": "6e7cbec29e5185e41e314fc67d70a3ac24104ea6"
 }

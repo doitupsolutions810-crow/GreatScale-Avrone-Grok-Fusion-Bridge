@@ -93,6 +93,10 @@ def verify(avrone_source, cycle_source, directory):
         "avrone/server.py": avrone_source / "avrone/server.py",
         "avrone/bridge.py": avrone_source / "avrone/bridge.py",
         "avrone/greatscale.py": avrone_source / "avrone/greatscale.py",
+        "avrone/trinity.py": avrone_source / "avrone/trinity.py",
+        "avrone/swarm_client.py": avrone_source / "avrone/swarm_client.py",
+        "avrone/swarm_outbox.py": avrone_source / "avrone/swarm_outbox.py",
+        "avrone/swarm_runtime.py": avrone_source / "avrone/swarm_runtime.py",
         "cycle/src/bridge/main.py": cycle_source / "src/bridge/main.py",
         "cycle/src/bridge/traits.py": cycle_source / "src/bridge/traits.py",
         "cycle/src/bridge/ns_fusion.py": cycle_source / "src/bridge/ns_fusion.py",
@@ -152,6 +156,14 @@ def verify(avrone_source, cycle_source, directory):
                 http.get(relay.base + "/health").json()["subscribers"] == 1)
         checked("blackboard_missing_auth", http.get(av.base + "/api/blackboard").status_code == 401)
         checked("event_missing_auth", http.get(ck.base + "/v1/events").status_code == 401)
+        swarm_task = {"message": "Explicit signing-gate test", "mode": "squad", "dispatch": "swarm"}
+        checked("actual_swarm_chat_requires_operator",
+                http.post(av.base + "/api/chat", json=swarm_task).status_code == 401)
+        blocked = http.post(av.base + "/api/chat", json=swarm_task, headers=headers)
+        checked("actual_missing_swarm_trust_fails_closed",
+                blocked.status_code == 200 and blocked.json().get("status") == "disabled"
+                and blocked.json().get("agents") == []
+                and blocked.json().get("swarm", {}).get("reason") == "swarm_trust_configuration_unavailable")
         for label, url in (("blackboard", av.base + "/api/blackboard"),
                            ("events", ck.base + "/v1/events")):
             checked(label + "_body_cap_before_auth",

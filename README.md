@@ -45,7 +45,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-The default suite starts explicit contract stubs; it passes 52 tests. For actual checkouts, run `python scripts/verify-live-peers.py --avrone-source /path/to/Avrone --cycle-source /path/to/CycleKernal`. The real-service check completes 50 cycles and 21 assertions, with module hashes and restart/dedup evidence. See [RECOVERY_VALIDATION.md](RECOVERY_VALIDATION.md) for exact revisions and remaining deployment gates.
+The default suite starts explicit contract stubs; it passes 52 tests. For actual checkouts, run `python scripts/verify-live-peers.py --avrone-source /path/to/Avrone --cycle-source /path/to/CycleKernal`. The real-service check completes 50 cycles and 23 assertions, with module hashes and restart/dedup evidence. See [RECOVERY_VALIDATION.md](RECOVERY_VALIDATION.md) for exact revisions and remaining deployment gates.
 
 ## Local stand-ins
 
