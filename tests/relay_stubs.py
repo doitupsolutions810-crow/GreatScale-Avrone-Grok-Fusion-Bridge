@@ -44,6 +44,8 @@ class ContractStub:
             "promote": {"action": "hold"},
         }
         self.health = {"status": "ghost-online", "version": "3.1.0"}
+        # Stable until the test simulates a process restart.
+        self.boot = "boot-1"
         self.fail: dict[str, int] = {}
         self.delay: dict[str, float] = {}
         self.raw: dict[str, bytes] = {}
@@ -164,13 +166,15 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             with stub.lock:
                 count = len(stub.board.posts)
-            self._send(200, {"status": "ok", "entries": count})
+                boot = stub.boot
+            self._send(200, {"status": "ok", "entries": count, "boot": boot})
             return
         if method == "GET":
             since = (query.get("since") or [None])[0]
             with stub.lock:
                 posts = stub.board.export(since)
-            self._send(200, {"posts": posts, "count": len(posts)})
+                boot = stub.boot
+            self._send(200, {"posts": posts, "count": len(posts), "boot": boot})
             return
         try:
             data = json.loads(body.decode("utf-8")) if body else None
@@ -194,6 +198,7 @@ class _Handler(BaseHTTPRequestHandler):
             # Same extras CycleKernal PR #14 puts on /health. They change every
             # read; the relay must not treat that as a new health snapshot.
             payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+            payload["boot"] = stub.boot
             payload["mode"] = "relay"
             payload["events"] = {"accepted": stored, "tick": time.time()}
             payload["relay"] = {"attempts": time.time(), "connected": True}

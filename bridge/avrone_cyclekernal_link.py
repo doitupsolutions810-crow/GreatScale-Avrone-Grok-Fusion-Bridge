@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextvars
 import contextvars
 import json
+import math
 import os
 import socket
 import time
@@ -281,27 +282,48 @@ def _account(stats: dict, hop: HopResult) -> None:
         stats["transport_errors"] += 1
 
 
-def _load_state(path: str) -> tuple[set[str], str, int]:
+class _Track:
+    """Delivered ids plus the boot id last seen for each peer.
+
+    ``seen`` is what we will not send again. ``boots`` is how we notice a
+    peer restarted and lost that data. An empty previous boot is the first
+    observation and does not resend.
+    """
+
+    def __init__(self, seen: set[str], cursor: str, boots: dict[str, str]):
+        self.seen = seen
+        self.cursor = cursor
+        self.boots = boots
+
+
+def _load_state(path: str) -> tuple[_Track, int]:
     if not path or not Path(path).is_file():
-        return set(), "", 0
+        return _Track(set(), "", {}), 0
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(data, dict) or not isinstance(data.get("seen"), list):
             raise ValueError("state file is not a seen-set")
         seen = {str(item) for item in data["seen"] if str(item)}
         cursor = data.get("cursor") if isinstance(data.get("cursor"), str) else ""
-        return seen, cursor, 0
+        raw_boots = data.get("boots") if isinstance(data.get("boots"), dict) else {}
+        boots = {str(key): str(value) for key, value in raw_boots.items() if str(value).strip()}
+        return _Track(seen, cursor, boots), 0
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
-        return set(), "", 1
+        return _Track(set(), "", {}), 1
 
 
-def _save_state(path: str, seen: set[str], cursor: str) -> bool:
+def _save_state(path: str, track: _Track) -> bool:
     if not path:
         return True
     try:
         dest = Path(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"version": 1, "seen": sorted(seen), "cursor": cursor})
+        payload = json.dumps({
+            "version": 2,
+            "seen": sorted(track.seen),
+            "cursor": track.cursor,
+            "boots": track.boots,
+        })
         tmp = dest.with_name(dest.name + ".tmp")
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(dest)
@@ -310,9 +332,47 @@ def _save_state(path: str, seen: set[str], cursor: str) -> bool:
         return False
 
 
-def _remember(stats: dict, path: str, seen: set[str], cursor: str) -> None:
-    if not _save_state(path, seen, cursor):
+def _remember(stats: dict, path: str, track: _Track) -> None:
+    if not _save_state(path, track):
         stats["state_errors"] += 1
+
+
+def _boot_value(body: Any) -> str:
+    """``boot`` on /health or a board read. String or integer epoch. Missing is empty."""
+    if not isinstance(body, dict) or "boot" not in body:
+        return ""
+    value = body["boot"]
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return ""
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    if not text or any(char in text for char in "\r\n\x00"):
+        return ""
+    return text[:80]
+
+
+def _note_boot(track: _Track, side: str, boot: str) -> bool:
+    """Remember ``boot``. Return True when a changed boot forgot delivered ids."""
+    if side not in ("avrone", "cyclekernal") or not boot:
+        return False
+    previous = track.boots.get(side, "")
+    if previous == boot:
+        return False
+    track.boots[side] = boot
+    if not previous:
+        return False
+    if side == "cyclekernal":
+        track.seen = {item for item in track.seen if item.startswith(("ck-mood-", "ck-health-", "ck-evidence-"))}
+        track.cursor = ""
+    else:
+        track.seen = {item for item in track.seen if not item.startswith(("ck-mood-", "ck-health-", "ck-evidence-"))}
+        track.cursor = ""
+    return True
 
 
 def _post_identity(post: dict) -> str:
@@ -461,6 +521,7 @@ def _empty_stats(state_errors: int) -> dict:
         "circuit_opened": 0,
         "circuit_skipped": 0,
         "deadline_stops": 0,
+        "reconciled": 0,
     }
 
 
@@ -471,66 +532,79 @@ def _accepted(stats: dict, hop: HopResult, counter: str) -> None:
         stats[counter] += 1
 
 
-def _pull_and_forward(cfg: RelayConfig, stats: dict, seen: set[str], cursor: str) -> tuple[bool, str]:
-    """Forward new board posts. Returns ``(transport_failure, cursor)``."""
+def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
+    """Forward new board posts. Returns whether the hop was a transport failure."""
     url = cfg.avrone_blackboard_url
-    if cursor:
-        url = url + "?" + urllib.parse.urlencode({"since": cursor})
+    if track.cursor:
+        url = url + "?" + urllib.parse.urlencode({"since": track.cursor})
     hop = _request("GET", url, timeout=cfg.timeout, token=cfg.avrone_token)
     if not hop.ok:
         _account(stats, hop)
-        return hop.error in _TRANSPORT, cursor
+        return hop.error in _TRANSPORT
+    if isinstance(hop.body, dict) and _note_boot(track, "avrone", _boot_value(hop.body)):
+        stats["reconciled"] += 1
+        # The request used the previous cursor. A restarted board treats an
+        # unknown since as "everything", but refetch without since so a peer
+        # that drops unknown cursors cannot hide the posts we now must resend.
+        if track.cursor == "":
+            refetch = _request("GET", cfg.avrone_blackboard_url, timeout=cfg.timeout, token=cfg.avrone_token)
+            if refetch.ok:
+                hop = refetch
     posts = posts_from_blackboard(hop.body)
     if posts is None:
         stats["errors"] += 1
         stats["malformed"] += 1
-        return False, cursor
+        return False
 
-    new_cursor = cursor
+    new_cursor = track.cursor
     for post in posts:
         if not isinstance(post, dict):
             stats["errors"] += 1
             stats["malformed"] += 1
             continue
         pid = _post_identity(post)
-        if is_echo(post) or pid in seen:
-            seen.add(pid)
+        if is_echo(post) or pid in track.seen:
+            track.seen.add(pid)
             new_cursor = pid
             continue
         text = clip_text(post.get("text"), cfg.max_text_chars)
         if not text:
             stats["errors"] += 1
             stats["malformed"] += 1
-            seen.add(pid)
+            track.seen.add(pid)
             new_cursor = pid
-            _remember(stats, cfg.state_path, seen, new_cursor)
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
             continue
         result = deliver_to_cyclekernal(_event_from_post(post, pid, cfg), cfg)
         if result.ok:
             _accepted(stats, result, "forwarded")
-            seen.add(pid)
+            track.seen.add(pid)
             new_cursor = pid
-            _remember(stats, cfg.state_path, seen, new_cursor)
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
             continue
         _account(stats, result)
         if result.error in _PERMANENT:
-            seen.add(pid)
+            track.seen.add(pid)
             new_cursor = pid
-            _remember(stats, cfg.state_path, seen, new_cursor)
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
             continue
         # Auth, 404, 5xx, timeout, bad JSON: leave the id unseen and stop
         # this batch so a later post is not acked ahead of a failed one.
-        _remember(stats, cfg.state_path, seen, new_cursor)
-        return result.error in _TRANSPORT, new_cursor
-    _remember(stats, cfg.state_path, seen, new_cursor)
-    return False, new_cursor
+        track.cursor = new_cursor
+        _remember(stats, cfg.state_path, track)
+        return result.error in _TRANSPORT
+    track.cursor = new_cursor
+    _remember(stats, cfg.state_path, track)
+    return False
 
 
 def _mirror(
     cfg: RelayConfig,
     stats: dict,
-    seen: set[str],
-    cursor: str,
+    track: _Track,
     *,
     url: str,
     kind: str,
@@ -545,9 +619,12 @@ def _mirror(
         stats["errors"] += 1
         stats["malformed"] += 1
         return False
+    if kind == "health" and _note_boot(track, "cyclekernal", _boot_value(hop.body)):
+        stats["reconciled"] += 1
+        _remember(stats, cfg.state_path, track)
     projection = project(hop.body)
     eid = f"ck-{kind}-{fingerprint(projection)}"
-    if not valid_id(eid) or eid in seen:
+    if not valid_id(eid) or eid in track.seen:
         return False
     event = FusionEvent(
         source="cyclekernal",
@@ -559,13 +636,13 @@ def _mirror(
     result = deliver_to_avrone(event, cfg)
     if result.ok:
         _accepted(stats, result, counter)
-        seen.add(eid)
-        _remember(stats, cfg.state_path, seen, cursor)
+        track.seen.add(eid)
+        _remember(stats, cfg.state_path, track)
         return False
     _account(stats, result)
     if result.error in _PERMANENT:
-        seen.add(eid)
-        _remember(stats, cfg.state_path, seen, cursor)
+        track.seen.add(eid)
+        _remember(stats, cfg.state_path, track)
         return False
     return result.error in _TRANSPORT
 
@@ -589,7 +666,7 @@ def relay_loop(
     cfg = config or load_config()
     if interval is None:
         interval = cfg.interval
-    seen, cursor, state_errors = _load_state(cfg.state_path)
+    track, state_errors = _load_state(cfg.state_path)
     stats = _empty_stats(state_errors)
     backoff = cfg.backoff_base
     cycle = 0
@@ -602,31 +679,34 @@ def relay_loop(
             token_deadline = _cycle_deadline.set(deadline_at)
             try:
                 transport = False
-                failed, cursor = _pull_and_forward(cfg, stats, seen, cursor)
-                transport = transport or failed
+                if _pull_and_forward(cfg, stats, track):
+                    transport = True
                 if _mirror(
                     cfg,
                     stats,
-                    seen,
-                    cursor,
+                    track,
                     url=cfg.ck_mood_url,
                     kind="mood",
                     project=project_mood,
                     counter="mood_mirrored",
                 ):
                     transport = True
+                resent = stats["reconciled"]
                 if _mirror(
                     cfg,
                     stats,
-                    seen,
-                    cursor,
+                    track,
                     url=cfg.ck_health_url,
                     kind="health",
                     project=project_health,
                     counter="health_mirrored",
                 ):
                     transport = True
-                _remember(stats, cfg.state_path, seen, cursor)
+                # CycleKernal's boot id is on /health, which we read after the
+                # forward. A restart forgets delivered ids; send them again now.
+                if stats["reconciled"] != resent and _pull_and_forward(cfg, stats, track):
+                    transport = True
+                _remember(stats, cfg.state_path, track)
                 if transport:
                     delay = min(backoff, cfg.backoff_max)
                     stats["backoffs"] += 1
@@ -644,7 +724,7 @@ def relay_loop(
     finally:
         _cycle_breaker.reset(token_breaker)
         _cycle_stats.reset(token_stats)
-    stats["seen"] = len(seen)
+    stats["seen"] = len(track.seen)
     stats["cycles"] = cycle
     return stats
 

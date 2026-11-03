@@ -24,7 +24,7 @@ Read on every call, not at import.
 | `AVRONE_ADMIN_TOKEN` | falls back to `FUSION_TOKEN` | Avrone only. |
 | `CK_FUSION_TOKEN` | falls back to `FUSION_TOKEN` | CycleKernal events only. |
 | `FUSION_MAX_BODY_BYTES` | `4096` | Largest JSON body the relay will send. |
-| `FUSION_MAX_TEXT_CHARS` | `4000` | Avrone's per-post text clip. |
+| `FUSION_MAX_TEXT_CHARS` | `4000` | Upper bound before the byte fit. The body cap wins: 4000 characters plus the JSON wrapper does not fit in 4096 bytes. |
 | `FUSION_TIMEOUT` | `5` | Per-request seconds. |
 | `FUSION_INTERVAL` | `2` | Sleep after a clean cycle. |
 | `FUSION_BACKOFF_BASE` | `0.5` | First sleep after a timeout or a refused connection. Doubles. |

@@ -101,7 +101,28 @@ def test_cyclekernal_mirror_entries_are_echoes():
     assert not is_echo({"id": "find0000001", "agent": "scout", "origin_node": "local", "text": "heat"})
 
 
+def _event_body(text: str) -> dict:
+    return {
+        "id": "find0000001",
+        "source": "avrone",
+        "kind": "finding",
+        "run_id": "run-1",
+        "payload": {
+            "id": "find0000001",
+            "agent": "scout",
+            "role": "agent",
+            "kind": "finding",
+            "text": text,
+            "refs": [],
+            "origin_node": "local",
+        },
+        "ts": 1700000000.0,
+    }
+
+
 def test_clip_and_body_cap():
+    from bridge.contract import dumps_utf8
+
     assert clip_text("  hello  ") == "hello"
     assert clip_text("a" * 4000) == "a" * 4000
     assert clip_text("a" * 4001).endswith("...")
@@ -111,6 +132,44 @@ def test_clip_and_body_cap():
     parsed = json.loads(raw)
     assert len(parsed["text"]) < 10000
     assert len(parsed["payload"]["text"]) < 10000
+
+    # 4000 ASCII characters plus the event wrapper does not fit in 4096 bytes.
+    wide = _event_body("a" * 4000)
+    assert len(dumps_utf8(wide)) > 4096
+    fitted = encode_bounded(wide, 4096)
+    assert fitted is not None and len(fitted) <= 4096
+    got = json.loads(fitted)["payload"]["text"]
+    assert got.endswith("...") and len(got) < 4000
+    longer = json.loads(fitted)
+    longer["payload"] = dict(longer["payload"])
+    longer["payload"]["text"] = clip_text("a" * 4000, len(got) + 1)
+    assert len(dumps_utf8(longer)) > 4096
+
+    # é is one character and two UTF-8 bytes. The cap is the serialized body.
+    accented = "é" * 4000
+    assert len(accented.encode("utf-8")) == 8000
+    wide = _event_body(accented)
+    assert len(dumps_utf8(wide)) > 4096
+    fitted = encode_bounded(wide, 4096)
+    assert fitted is not None and len(fitted) <= 4096
+    got = json.loads(fitted)["payload"]["text"]
+    assert "é" in got and len(got.encode("utf-8")) < 8000
+    longer = json.loads(fitted)
+    longer["payload"] = dict(longer["payload"])
+    longer["payload"]["text"] = clip_text(accented, len(got) + 1)
+    assert len(dumps_utf8(longer)) > 4096
+
+    # One emoji is four UTF-8 bytes. A character clip of 4000 would be 16 KB.
+    emoji = "😀" * 2000
+    assert len(emoji.encode("utf-8")) == 8000
+    fitted = encode_bounded(_event_body(emoji), 4096)
+    assert fitted is not None and len(fitted) <= 4096
+    got = json.loads(fitted)["payload"]["text"]
+    assert "😀" in got
+    longer = json.loads(fitted)
+    longer["payload"] = dict(longer["payload"])
+    longer["payload"]["text"] = clip_text(emoji, len(got) + 1)
+    assert len(dumps_utf8(longer)) > 4096
 
 
 def test_mood_fingerprint_ignores_timestamp_and_metrics():

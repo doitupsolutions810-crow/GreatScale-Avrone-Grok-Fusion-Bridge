@@ -13,6 +13,7 @@ from __future__ import annotations
 import hmac
 import os
 import threading
+import uuid
 
 from flask import Flask, jsonify, request
 
@@ -24,6 +25,8 @@ except ImportError:  # python bridge/avrone_shim.py
 app = Flask(__name__)
 _lock = threading.Lock()
 _board = Board()
+# Changes when this process starts. The relay resends mirrors when it changes.
+_BOOT = uuid.uuid4().hex[:12]
 
 
 def _expected_token() -> str:
@@ -42,7 +45,7 @@ def _body_limit() -> int:
 def status():
     with _lock:
         count = len(_board.posts)
-    return jsonify(status="ok", service="avrone-blackboard-stand-in", entries=count)
+    return jsonify(status="ok", service="avrone-blackboard-stand-in", entries=count, boot=_BOOT)
 
 
 @app.get("/api/blackboard")
@@ -52,7 +55,7 @@ def get_blackboard():
     since = request.args.get("since")
     with _lock:
         posts = _board.export(since)
-    return jsonify(posts=posts, count=len(posts))
+    return jsonify(posts=posts, count=len(posts), boot=_BOOT)
 
 
 @app.post("/api/blackboard")
@@ -88,7 +91,7 @@ def _auth_ok() -> bool:
 @app.get("/health")
 def health():
     """Not an Avrone route. Present so a local probe can see the stand-in."""
-    return jsonify(status="ok", service="avrone-blackboard-stand-in")
+    return jsonify(status="ok", service="avrone-blackboard-stand-in", boot=_BOOT)
 
 
 if __name__ == "__main__":

@@ -200,59 +200,125 @@ def normalize_event(data: Any) -> tuple[dict | None, str | None]:
     return event, None
 
 
-def encode_bounded(body: dict, max_bytes: int) -> bytes | None:
-    """Compact JSON of ``body``, shrinking ``text`` fields until it fits ``max_bytes``.
+def dumps_utf8(value: dict) -> bytes:
+    """Compact UTF-8 JSON. Characters stay as UTF-8, not ``\\u`` escapes.
 
-    Returns None when even a stub body cannot fit. Callers treat that as a
-    permanent reject so a single oversized event cannot block the loop.
+    The 4096-byte cap is the length of these bytes. A 4000-character text is
+    not a safe clip: the wrapper around it, and any multibyte character, can
+    push the body over the cap before a peer ever looks at ``text``.
     """
-    def dumps(value: dict) -> bytes:
-        return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _text_at(obj: dict, where: str) -> str | None:
+    if where == "text":
+        value = obj.get("text")
+        return value if isinstance(value, str) else None
+    payload = obj.get("payload")
+    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+        return payload["text"]
+    return None
+
+
+def _with_text(obj: dict, where: str, text: str) -> dict:
+    out = dict(obj)
+    if where == "text":
+        out["text"] = text
+        return out
+    payload = dict(out.get("payload") or {})
+    payload["text"] = text
+    out["payload"] = payload
+    return out
+
+
+def _longest_text(obj: dict, where: str, original: str, max_bytes: int) -> tuple[dict, bytes] | None:
+    """Longest ``clip_text`` of ``original`` whose serialized object is <= ``max_bytes``.
+
+    The search is on the UTF-8 length of the whole JSON document, so a
+    multibyte character costs its real encoded size and JSON escapes count too.
+    """
+    def trial(limit: int) -> tuple[dict, bytes]:
+        if limit >= len(original):
+            text = original
+        elif limit <= 0:
+            text = ""
+        else:
+            text = clip_text(original, limit)
+        updated = _with_text(obj, where, text)
+        return updated, dumps_utf8(updated)
 
     try:
-        raw = dumps(body)
+        full_obj, full_raw = trial(len(original))
     except (TypeError, ValueError):
         return None
-    if len(raw) <= max_bytes:
-        return raw
+    if len(full_raw) <= max_bytes:
+        return full_obj, full_raw
+    lo, hi = 0, len(original) - 1
+    best: tuple[dict, bytes] | None = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        try:
+            updated, raw = trial(mid)
+        except (TypeError, ValueError):
+            return best
+        if len(raw) <= max_bytes:
+            best = (updated, raw)
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def encode_bounded(body: dict, max_bytes: int) -> bytes | None:
+    """UTF-8 JSON of ``body`` that is at most ``max_bytes``.
+
+    Shrinks ``text`` and ``payload.text`` to the longest clip that still fits
+    the wrapper. Returns None when even a stub body cannot fit. Callers treat
+    that as a permanent reject so one oversized event cannot block the loop.
+    """
     try:
+        raw = dumps_utf8(body)
         obj = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError:
+    except (TypeError, ValueError, json.JSONDecodeError):
         return None
     if not isinstance(obj, dict):
         return None
-
-    def shrink_text(container: dict) -> bool:
-        text = container.get("text")
-        if not isinstance(text, str) or len(text) <= 1:
-            return False
-        shrunk = clip_text(text, max(1, len(text) // 2))
-        if shrunk == text:
-            return False
-        container["text"] = shrunk
-        return True
-
-    for _ in range(24):
-        changed = shrink_text(obj)
-        payload = obj.get("payload")
-        if isinstance(payload, dict):
-            changed = shrink_text(payload) or changed
-        raw = dumps(obj)
+    if len(raw) <= max_bytes:
+        return raw
+    for _ in range(4):
         if len(raw) <= max_bytes:
             return raw
-        if not changed:
+        progressed = False
+        for where in ("payload", "text"):
+            original = _text_at(obj, where)
+            if not original:
+                continue
+            fitted = _longest_text(obj, where, original, max_bytes)
+            progressed = True
+            if fitted is None:
+                # This field cannot absorb the overflow. Blank it and fit the other.
+                obj = _with_text(obj, where, "")
+                raw = dumps_utf8(obj)
+                continue
+            obj, raw = fitted
+            if len(raw) <= max_bytes:
+                return raw
+        if not progressed:
             break
     if isinstance(obj.get("payload"), dict):
         obj["payload"] = {"truncated": True}
-        raw = dumps(obj)
+        try:
+            raw = dumps_utf8(obj)
+        except (TypeError, ValueError):
+            return None
         if len(raw) <= max_bytes:
             return raw
-    if isinstance(obj.get("text"), str):
-        obj["text"] = clip_text(obj["text"], 32)
-        raw = dumps(obj)
-        if len(raw) <= max_bytes:
-            return raw
-    return None
+        original = _text_at(obj, "text")
+        if original is not None:
+            fitted = _longest_text(obj, "text", original, max_bytes)
+            if fitted is not None and len(fitted[1]) <= max_bytes:
+                return fitted[1]
+    return None if len(raw) > max_bytes else raw
 
 
 def is_mirrored_agent(value: Any) -> bool:

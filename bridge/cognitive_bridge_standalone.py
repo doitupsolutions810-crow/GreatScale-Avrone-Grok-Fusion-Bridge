@@ -17,6 +17,7 @@ from __future__ import annotations
 import hmac
 import os
 import threading
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -82,12 +83,16 @@ async def guard(request: Request, call_next):
     return await call_next(request)
 
 
+_BOOT = uuid.uuid4().hex[:12]
+
+
 @app.get("/health")
 def health():
     return {
         "status": "ghost-online",
         "version": "contract-stand-in",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "boot": _BOOT,
     }
 
 

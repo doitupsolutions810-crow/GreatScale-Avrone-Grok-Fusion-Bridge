@@ -14,6 +14,7 @@ import urllib.request
 import pytest
 
 from bridge.avrone_cyclekernal_link import relay_loop
+from bridge.contract import EventLog
 from tests.relay_stubs import ContractStub
 
 TOKEN = "fusion-test-token"
@@ -437,3 +438,71 @@ def test_cycle_deadline_stops_a_hang_when_the_breaker_is_off(peers, monkeypatch)
     assert stats["deadline_stops"] >= 1
     assert stats["forwarded"] == 0
     assert elapsed < 1.5, elapsed
+
+
+def _body_of_size(n: int) -> bytes:
+    prefix = b'{"agent":"a","kind":"finding","run_id":"r","text":"'
+    suffix = b'"}'
+    fill = n - len(prefix) - len(suffix)
+    assert fill > 0
+    raw = prefix + (b"a" * fill) + suffix
+    assert len(raw) == n
+    return raw
+
+
+def test_http_cap_accepts_4096_and_rejects_4097(peers):
+    av, _ck = peers
+    ok, _ = _raw_post(av.base + "/api/blackboard", _body_of_size(4096), TOKEN)
+    assert ok == 200
+    over, _ = _raw_post(av.base + "/api/blackboard", _body_of_size(4097), TOKEN)
+    assert over == 413
+    assert len(av.board.posts) == 1
+
+
+def test_four_thousand_char_text_is_sent_under_the_byte_cap(peers):
+    av, ck = peers
+    av.inject_post(_finding("find00004000", "a" * 4000))
+    av.inject_post(_finding("find0000emoji", "😀" * 1500))
+    stats = relay_loop(interval=0, max_cycles=1)
+    assert stats["forwarded"] == 2, stats
+    sent = [body for path, body in ck.bodies if path == "/v1/events"]
+    assert sent and all(len(body) <= 4096 for body in sent)
+    stored = {event["id"]: event["payload"]["text"] for event in ck.log.list()}
+    assert stored["find00004000"].endswith("...") and len(stored["find00004000"]) < 4000
+    assert "😀" in stored["find0000emoji"]
+    assert len(stored["find0000emoji"].encode("utf-8")) < len(("😀" * 1500).encode("utf-8"))
+
+
+def test_boot_change_resends_what_the_restarted_peer_lost(peers):
+    av, ck = peers
+    av.inject_post(_finding())
+    first = relay_loop(interval=0, max_cycles=1)
+    assert first["forwarded"] == 1
+    assert first["mood_mirrored"] == 1
+    assert first["reconciled"] == 0
+
+    with ck.lock:
+        ck.boot = "boot-2"
+        ck.log = EventLog()
+    resent = relay_loop(interval=0, max_cycles=1)
+    assert resent["reconciled"] >= 1
+    assert resent["forwarded"] == 1
+    assert [event["id"] for event in ck.log.list()] == ["find0000001"]
+    held = relay_loop(interval=0, max_cycles=1)
+    assert held["forwarded"] == 0
+    assert held["reconciled"] == 0
+    assert len(ck.log.list()) == 1
+
+    with av.lock:
+        av.boot = "boot-9"
+        av.board.posts = type(av.board.posts)(
+            (pid, post)
+            for pid, post in av.board.posts.items()
+            if not str(post.get("agent", "")).startswith("cyclekernal:")
+        )
+    mirrored = relay_loop(interval=0, max_cycles=1)
+    assert mirrored["reconciled"] >= 1
+    assert mirrored["mood_mirrored"] == 1
+    assert mirrored["forwarded"] == 0
+    assert len(ck.log.list()) == 1
+    assert any(post.get("origin_node") == "fusion-bridge" for post in av.board.export())

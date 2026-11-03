@@ -65,18 +65,20 @@ The relay treats 401 and 403 as auth failures. It does **not** remember the post
 
 Avrone's process-wide `BodyLimit` is 16 MB (`AVRONE_MAX_BODY_BYTES`). Do not shrink that. The cap below applies only to the two new routes.
 
-Avrone's in-process bridge clips post `text` to **4000 characters** (`avrone/bridge.py` `MAX_TEXT`). The fusion routes also refuse an HTTP body over **4096 bytes** so a caller cannot hand the process a large payload before the token is checked (the same class of bug `BodyLimit` closed, at a fusion-sized ceiling).
+Avrone's in-process bridge clips post `text` to **4000 characters** (`avrone/bridge.py` `MAX_TEXT`). That clip does **not** fit these HTTP routes. A 4000-character text plus the JSON wrapper is already more than **4096 bytes**, and a multibyte character costs 2–4 UTF-8 bytes, so the body cap rejects the request before any character clip can run.
+
+The cap on `POST /api/blackboard` and `POST /v1/events` is the length of the raw UTF-8 body:
 
 | Check | Rule |
 | --- | --- |
 | Declared `Content-Length` > 4096 | **413** immediately, connection closed, body not stored. Check this **before** auth. |
 | Buffered body > 4096 | 413, body not stored |
-| `text` longer than 4000 characters | Clip to 3997 characters plus `...` (Avrone `_clip`). Clipping is not an error. |
-| JSON the relay cannot shrink under 4096 | Relay drops that one event and remembers it so it cannot block the queue |
+| Body of exactly 4096 bytes | Accept, then validate the JSON. |
+| Sender-side text | Clip `text` / `payload.text` so `len(utf8_json) <= 4096`. Count the serialized document, including the wrapper and JSON escapes, not the Python character length. Mark a cut with `...`. |
 
 413 body: `{"detail":"request body too large (max 4096 bytes)"}`.
 
-The relay never sends a body over `FUSION_MAX_BODY_BYTES` (default 4096). A 413 is permanent for that id.
+The relay never sends a body over `FUSION_MAX_BODY_BYTES` (default 4096). A 4000-character payload is shortened until the wrapped document fits. A 413 from a peer is still permanent for that id. A body the relay cannot shrink under the cap is dropped and remembered so it cannot block the queue.
 
 ## Avrone
 
@@ -281,7 +283,9 @@ Each cycle has a deadline (`FUSION_CYCLE_DEADLINE`, default 10s). A request uses
 
 An id is remembered only after a 2xx, or after a permanent 4xx (400, 413, other non-auth 4xx). Timeouts, connection failures, 401/403, 404/405, and 5xx leave the id unseen so a later cycle retries it. A transport failure backs off from `FUSION_BACKOFF_BASE` (default 0.5s), doubling to `FUSION_BACKOFF_MAX` (default 8s), and the multiplier resets after a cycle with no transport failure. 404 and 500 do not use that backoff; they wait for `FUSION_INTERVAL`.
 
-`FUSION_STATE_PATH` persists the seen ids and the blackboard cursor as `{"version":1,"seen":[...],"cursor":"..."}`. A missing file starts empty. A corrupt file is discarded (`state_errors`) and the peer's id dedup stops a second copy from being stored. Deleting the file re-sends; a compliant peer answers `duplicate: true`.
+`GET /health` (and Avrone `GET /api/status`, and `GET /api/blackboard`) include `boot`: a string or integer epoch that stays constant until that process restarts and changes when it does. The first value the relay sees is recorded and does not cause a resend. A later change means that peer lost its memory: the relay forgets ids it delivered **to that peer** and sends them again. CycleKernal's boot clears forwarded Avrone entry ids (mood and health mirror ids stay). Avrone's boot clears `ck-mood-` / `ck-health-` / `ck-evidence-` ids (forwarded findings stay). A missing `boot` leaves the saved state alone, so an older peer does not look like a restart on every poll.
+
+`FUSION_STATE_PATH` persists that as `{"version":2,"seen":[...],"cursor":"...","boots":{"avrone":"...","cyclekernal":"..."}}`. A version-1 file (no `boots`) still loads. A missing file starts empty. A corrupt file is discarded (`state_errors`). Deleting the file re-sends; a peer that still has the id answers `duplicate: true`. A peer that restarted does not, which is why `boot` exists.
 
 Direction:
 
