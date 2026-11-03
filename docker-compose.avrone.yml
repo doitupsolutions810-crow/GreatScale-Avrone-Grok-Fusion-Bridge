@@ -1,0 +1,44 @@
+# docker-compose.avrone.yml
+# Full fusion stack: Avrone blackboard + CognitiveBridge + relay
+# One command: docker compose -f docker-compose.avrone.yml up --build
+
+services:
+  avrone:
+    build: ./Avrone
+    ports:
+      - "8710:8710"
+    environment:
+      - AVRONE_PORT=8710
+      - AVRONE_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8710/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  cognitive-bridge:
+    build: ./cognitive-bridge
+    ports:
+      - "8090:8090"
+    environment:
+      - CK_PORT=8090
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  relay:
+    image: python:3.12-slim
+    command: sh -c "pip install requests && python relay.py"
+    depends_on:
+      avrone:
+        condition: service_healthy
+      cognitive-bridge:
+        condition: service_healthy
+    environment:
+      - AVRONE_BASE=http://avrone:8710
+      - CK_BASE=http://cognitive-bridge:8090
+    restart: unless-stopped
