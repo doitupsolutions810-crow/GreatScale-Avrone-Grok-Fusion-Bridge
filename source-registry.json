@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "repaired_main": "3f8cc12a965486d5157431c7d906f04024b904cf",
+  "relay_reference": {
+    "repository": "https://github.com/doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge",
+    "revision": "8c5ea85e973c52631cd9fc1b14e4392f19a1f14c"
+  },
+  "avrone_blackboard_revision": "406e727cd478799f5a0bbe091d045e39710903a1",
+  "resources": [
+    {
+      "path": ".gitignore",
+      "sha256": "4cb18d750ab3d36453c88d0f1b380636848f501dadf444d3e442f2b7254ffe5f"
+    },
+    {
+      "path": "CONTRACT.md",
+      "sha256": "633f18f289fb915efe808afc285d869fb42cd5a9067589419a57a02108d1e223"
+    },
+    {
+      "path": "README.md",
+      "sha256": "7690c9d000332faf4adcadeb625b8f38c538c043bf1787a3398c51bb72915cc5"
+    },
+    {
+      "path": "RECOVERY_VALIDATION.md",
+      "sha256": "73c83ebce43779ce5495b46a29b537dcbf38dabb538d8f4ace5c79ca50cd5085"
+    },
+    {
+      "path": "bridge/README.md",
+      "sha256": "c2446028160f347426072735f22c3bad0c1f42c3920aa8d9823b6c07227044c7"
+    },
+    {
+      "path": "bridge/__init__.py",
+      "sha256": "0f42d3be9ba6fd070d053f9f6e91a3f6fb43c27108a8d31e1b3d9fec9b9e3c54"
+    },
+    {
+      "path": "bridge/avrone_cyclekernal_link.py",
+      "sha256": "98e9b67e0e56eed56c80ebfa0635e8ec2e44017405af7bc2c84858922c41374b"
+    },
+    {
+      "path": "bridge/avrone_shim.py",
+      "sha256": "9249ac3a6790060ac93e215e4c7455ae83baffd61bbb34b0a0872ad2178d51fa"
+    },
+    {
+      "path": "bridge/cognitive_bridge_standalone.py",
+      "sha256": "3ee758a9e5f8dc373bd4ced04cc6bfb5d551532af7161f8ade80b72c459c88ca"
+    },
+    {
+      "path": "bridge/contract.py",
+      "sha256": "98b102862f3e9a484771bd694ca0d5c9d174a8bc2f2d29706604b6b9fc30900e"
+    },
+    {
+      "path": "bridge/endpoint_resolver.py",
+      "sha256": "c99a446d5ce802b3b19ed9da0eda571aedff8b78135fd395a0af3db9a2196f08"
+    },
+    {
+      "path": "bridge/greatscale_evidence.py",
+      "sha256": "8c2215ccf97233910f1e63d6605b44650c79d54b32634ee59ddb96c0b84f5a4e"
+    },
+    {
+      "path": "bridge/requirements.txt",
+      "sha256": "bd1f54646ddde113ca18efdd259381274fe923a2dbaa1026370d37b9fd9953a1"
+    },
+    {
+      "path": "bridge/settings.py",
+      "sha256": "79b5ff1b2c01f9711e022bb2979e3c0c145843ed2ce1a5c1814b97c8a3c6a6ec"
+    },
+    {
+      "path": "bridge/test_integration.py",
+      "sha256": "44f252774ac910b738c8c373a239395c2f01ed4e72f6f50a5c4d4daf2ceb3e02"
+    },
+    {
+      "path": "docker-compose.avrone.yml",
+      "sha256": "fdf30bc5abc4c7af70d2fcaa18995295d87ef730f757a542610fceed8118f02f"
+    },
+    {
+      "path": "pytest.ini",
+      "sha256": "efcce6f55356a0fdaf6f9631b9d9a9a92fd1caba8ddce5809b8a77bb998cc3ba"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "7976e5b8f70089d046ac7aeb74c405be06913d4eb236f4e1bd4df4d2d160f36f"
+    },
+    {
+      "path": "scripts/verify-live-peers.py",
+      "sha256": "48595f670a48bebc1d8110937adf774852f056ba87027527a53a6a063af61027"
+    },
+    {
+      "path": "scripts/verify-source-registry.py",
+      "sha256": "20f91f56987fe8e40201569e441845b1cf8fb0ceee7c82519f4ac60343aa1099"
+    },
+    {
+      "path": "tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/relay_stubs.py",
+      "sha256": "161c60f84d4f88df70a57f970a2caf29e7778ec64ad0ae497bf11bf5d87dba05"
+    },
+    {
+      "path": "tests/test_bridge.py",
+      "sha256": "ea79ef74e8d9fdd123a34bd0f026fbc0b1760c9634836fbf495d3b84b2e7a041"
+    },
+    {
+      "path": "tests/test_evidence.py",
+      "sha256": "e6cc500caf2de1c861fe1818196b0201374169852319519e85fa04f4b231bb06"
+    },
+    {
+      "path": "tests/test_relay_integration.py",
+      "sha256": "0783ecb30e51fd16bea196980aed7d0051172d51b5c4560e21ad6ceaed686ccf"
+    },
+    {
+      "path": "validation/live-peers.json",
+      "sha256": "19cf87a0d24c3d0221e52adf76fe1f203f57cfe488a7b2ded3e20f066f4d5254"
+    }
+  ],
+  "avrone_runtime_revision": "7ed83cc4dd7c238377a24b95cb20e29000e72efe",
+  "cycle_runtime_revision": "6e7cbec29e5185e41e314fc67d70a3ac24104ea6",
+  "validation": {
+    "python_passed": 52,
+    "cross_service_assertions": 23,
+    "relay_cycles": 50,
+    "report": "RECOVERY_VALIDATION.md",
+    "network_report": "validation/live-peers.json"
+  }
+}
