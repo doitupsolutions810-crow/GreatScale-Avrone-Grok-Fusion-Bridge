@@ -1,90 +1,304 @@
 from __future__ import annotations
 
 import json
-import time
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from bridge.avrone_cyclekernal_link import (
     FusionEvent,
+    HopResult,
     post_to_avrone_bridge,
     post_to_cyclekernal,
     relay_loop,
 )
+from bridge.contract import (
+    clip_text,
+    encode_bounded,
+    fingerprint,
+    project_health,
+    project_mood,
+)
+from bridge.endpoint_resolver import resolve_avrone_base, resolve_ck_base
+from bridge.settings import load_config
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_fusion_event_auto_timestamp():
-    e = FusionEvent(source="avrone", kind="finding", run_id="r1", payload={"x": 1})
-    assert e.ts > 0
-    assert "x" in e.to_json()
+def _quiet_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "AVRONE_BASE",
+        "CK_BASE",
+        "FUSION_TOKEN",
+        "AVRONE_ADMIN_TOKEN",
+        "CK_FUSION_TOKEN",
+        "FUSION_STATE_PATH",
+        "FUSION_TIMEOUT",
+        "FUSION_BACKOFF_BASE",
+        "FUSION_BACKOFF_MAX",
+        "FUSION_INTERVAL",
+        "FUSION_MAX_BODY_BYTES",
+        "AVRONE_BLACKBOARD_PATH",
+        "CK_EVENTS_PATH",
+        "AVRONE_SHIM_BASE",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
-def test_post_to_cyclekernal_success():
-    event = FusionEvent(source="avrone", kind="finding", run_id="r1", payload={"ok": True})
-    mock_resp = mock.Mock()
-    mock_resp.status = 200
-    mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
-    mock_resp.__exit__ = mock.Mock(return_value=False)
-    with mock.patch("urllib.request.urlopen", return_value=mock_resp) as m:
-        assert post_to_cyclekernal(event) is True
-        m.assert_called_once()
-        req = m.call_args[0][0]
-        assert req.full_url.endswith("/api/events")
-        assert req.method == "POST"
+def test_fusion_event_auto_timestamp_and_id():
+    event = FusionEvent(source="avrone", kind="finding", run_id="r1", payload={"x": 1})
+    assert event.ts > 0
+    assert event.id.startswith("ev-")
+    assert "x" in event.to_json()
 
 
-def test_post_to_cyclekernal_soft_fail():
+def test_defaults_match_upstream_ports(monkeypatch):
+    _quiet_env(monkeypatch)
+    cfg = load_config()
+    assert cfg.avrone_base == "http://127.0.0.1:8710"
+    assert cfg.ck_base == "http://127.0.0.1:8090"
+    assert cfg.blackboard_path == "/api/blackboard"
+    assert cfg.events_path == "/v1/events"
+    assert cfg.mood_path == "/v1/current_mood"
+    assert cfg.health_path == "/health"
+    assert cfg.status_path == "/api/status"
+    assert cfg.max_body_bytes == 4096
+    assert cfg.max_text_chars == 4000
+
+
+def test_path_and_token_overrides(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setenv("CK_EVENTS_PATH", "/v1/feedback")
+    monkeypatch.setenv("AVRONE_BASE", "http://avrone.internal:8710/")
+    monkeypatch.setenv("AVRONE_ADMIN_TOKEN", "av")
+    monkeypatch.setenv("CK_FUSION_TOKEN", "ck")
+    monkeypatch.setenv("FUSION_TOKEN", "shared")
+    cfg = load_config()
+    assert cfg.ck_events_url == "http://127.0.0.1:8090/v1/feedback"
+    assert cfg.avrone_base == "http://avrone.internal:8710"
+    assert cfg.avrone_token == "av"
+    assert cfg.ck_token == "ck"
+
+
+def test_clip_and_body_cap():
+    assert clip_text("  hello  ") == "hello"
+    assert clip_text("a" * 4000) == "a" * 4000
+    assert clip_text("a" * 4001).endswith("...")
+    assert len(clip_text("a" * 4001)) == 4000
+    raw = encode_bounded({"id": "abc", "text": "x" * 10000, "payload": {"text": "y" * 10000}}, 4096)
+    assert raw is not None and len(raw) <= 4096
+    parsed = json.loads(raw)
+    assert len(parsed["text"]) < 10000
+    assert len(parsed["payload"]["text"]) < 10000
+
+
+def test_mood_fingerprint_ignores_timestamp_and_metrics():
+    base = {
+        "mood": "convergent",
+        "mood_dot": 0.724,
+        "ns_fitness": 0.611,
+        "genome_id": "gn",
+        "traits": ["Analytical/Convergent"],
+        "promote": {"action": "hold"},
+        "timestamp": "t1",
+        "metrics": {"tick": 1},
+        "explanation": "NS fitness 0.61",
+    }
+    other = dict(base, timestamp="t2", metrics={"tick": 99}, explanation="different")
+    assert fingerprint(project_mood(base)) == fingerprint(project_mood(other))
+    moved = dict(base, mood="survival", mood_dot=0.10)
+    assert fingerprint(project_mood(base)) != fingerprint(project_mood(moved))
+    health = {"status": "ghost-online", "version": "3.1.0", "timestamp": "t1"}
+    assert fingerprint(project_health(health)) == fingerprint(project_health(dict(health, timestamp="t2")))
+
+
+def test_posts_use_contract_paths_and_admin_header(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setenv("FUSION_TOKEN", "sekret")
+    seen: list[tuple] = []
+
+    def fake(method, url, **kwargs):
+        seen.append((method, url, kwargs.get("token"), kwargs.get("raw")))
+        return HopResult(ok=True, status=200, body={"accepted": True, "duplicate": False})
+
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._request", fake)
+    finding = FusionEvent(source="avrone", kind="finding", run_id="r1", payload={"text": "hi"}, id="find0000001")
+    mood = FusionEvent(source="cyclekernal", kind="mood", run_id="fusion-relay", payload={"mood": "neutral"}, id="ck-mood-aaaabbbbcccc")
+    assert post_to_cyclekernal(finding) is True
+    assert post_to_avrone_bridge(mood) is True
+    assert seen[0][0] == "POST" and seen[0][1].endswith("/v1/events") and seen[0][2] == "sekret"
+    assert seen[1][0] == "POST" and seen[1][1].endswith("/api/blackboard")
+    posted = json.loads(seen[1][3])
+    assert posted["kind"] == "conclusion"
+    assert posted["role"] == "cyclekernal-relay"
+    assert posted["origin_node"] == "fusion-bridge"
+    assert len(seen[0][3]) <= 4096
+
+
+def test_post_soft_fails(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setattr(
+        "bridge.avrone_cyclekernal_link._request",
+        lambda *args, **kwargs: HopResult(ok=False, error="transport"),
+    )
     event = FusionEvent(source="avrone", kind="finding", run_id="r1", payload={})
-    with mock.patch("urllib.request.urlopen", side_effect=ConnectionError("down")):
-        assert post_to_cyclekernal(event) is False
+    assert post_to_cyclekernal(event) is False
 
 
-def test_post_to_avrone_bridge_mood_kind():
-    event = FusionEvent(source="cyclekernal", kind="mood", run_id="r2", payload={"valence": 0.7})
-    mock_resp = mock.Mock()
-    mock_resp.status = 200
-    mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
-    mock_resp.__exit__ = mock.Mock(return_value=False)
-    with mock.patch("urllib.request.urlopen", return_value=mock_resp) as m:
-        assert post_to_avrone_bridge(event) is True
-        body = json.loads(m.call_args[0][0].data)
-        assert body["kind"] == "conclusion"
-        assert body["role"] == "cyclekernal-relay"
+def test_backoff_doubles_on_timeouts_and_resets(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setenv("FUSION_BACKOFF_BASE", "0.5")
+    monkeypatch.setenv("FUSION_BACKOFF_MAX", "8")
+    sleeps: list[float] = []
+    mode = {"value": "fail"}
+    posts = {"n": 0}
+
+    def fake(method, url, **kwargs):
+        if mode["value"] == "fail":
+            return HopResult(ok=False, error="timeout")
+        if method == "GET" and "blackboard" in url:
+            return HopResult(ok=True, status=200, body={"posts": [], "count": 0})
+        if method == "GET":
+            return HopResult(
+                ok=True,
+                status=200,
+                body={"mood": "neutral", "mood_dot": 0.5, "status": "ghost-online", "version": "3"},
+            )
+        posts["n"] += 1
+        if posts["n"] == 2:
+            mode["value"] = "fail"
+        return HopResult(ok=True, status=200, body={"posted": True, "duplicate": False, "id": "x"})
+
+    def sleeper(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            mode["value"] = "ok"
+
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._request", fake)
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._sleep", sleeper)
+    stats = relay_loop(interval=0, max_cycles=3)
+    # Cycle 1 times out (sleep 0.5). Cycle 2 is clean, so the multiplier resets.
+    # Cycle 3 times out again at the base delay, not at 1.0.
+    assert sleeps == [0.5, 0.5]
+    assert stats["backoffs"] == 2
+    assert stats["timeouts"] >= 3
+    assert stats["last_backoff_s"] == 0.5
 
 
-def test_relay_loop_forwards_and_mirrors():
-    blackboard = [
-        {"id": "e1", "kind": "finding", "run_id": "r1", "text": "hello", "payload": {"t": 1}},
-        {"id": "e1", "kind": "finding", "run_id": "r1", "text": "hello", "payload": {"t": 1}},  # dup
-        {"id": "e2", "kind": "finding", "run_id": "r2", "text": "world", "payload": {"t": 2}},
-    ]
-    health = {"status": "ok", "uptime": 12}
+def test_missing_route_does_not_backoff(monkeypatch):
+    _quiet_env(monkeypatch)
+    sleeps: list[float] = []
 
-    def fake_urlopen(req, timeout=5):
-        url = req.full_url if hasattr(req, "full_url") else req.get_full_url()
-        resp = mock.Mock()
-        resp.status = 200
-        if "blackboard" in url:
-            resp.read.return_value = json.dumps(blackboard).encode()
-        elif "health" in url:
-            resp.read.return_value = json.dumps(health).encode()
-        else:
-            resp.read.return_value = b"{\"ok\": true}"
-        resp.__enter__ = mock.Mock(return_value=resp)
-        resp.__exit__ = mock.Mock(return_value=False)
-        return resp
+    def fake(method, url, **kwargs):
+        if method == "GET" and "blackboard" in url:
+            return HopResult(ok=False, status=404, error="missing")
+        if method == "GET":
+            return HopResult(
+                ok=True,
+                status=200,
+                body={"mood": "neutral", "mood_dot": 0.5, "status": "ghost-online", "version": "3"},
+            )
+        return HopResult(ok=True, status=200, body={"posted": True, "duplicate": False})
 
-    with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-        with mock.patch("time.sleep"):
-            stats = relay_loop(interval=0, max_cycles=1)
-    assert stats["forwarded"] == 2
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._request", fake)
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._sleep", sleeps.append)
+    stats = relay_loop(interval=0, max_cycles=1)
+    assert sleeps == []
+    assert stats["backoffs"] == 0
+    assert stats["missing_routes"] == 1
+    assert stats["mood_mirrored"] == 1
     assert stats["health_mirrored"] == 1
+    assert stats["forwarded"] == 0
+
+
+def test_resolver_probes_real_liveness_routes(monkeypatch):
+    _quiet_env(monkeypatch)
+    seen: list[str] = []
+
+    def fake(url, timeout=2.0):
+        seen.append(url)
+        response = mock.Mock()
+        response.status = 200
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        return response
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    assert resolve_avrone_base() == "http://127.0.0.1:8710"
+    assert resolve_ck_base() == "http://127.0.0.1:8090"
+    assert seen[0] == "http://127.0.0.1:8710/api/status"
+    assert seen[1] == "http://127.0.0.1:8090/health"
+
+
+def test_resolver_falls_back_to_a_different_shim(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setenv("AVRONE_SHIM_BASE", "http://127.0.0.1:8711")
+
+    def fake(url, timeout=2.0):
+        if url.startswith("http://127.0.0.1:8710"):
+            raise OSError("down")
+        response = mock.Mock()
+        response.status = 200
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        return response
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    assert resolve_avrone_base() == "http://127.0.0.1:8711"
+
+
+def test_resolver_soft_fails_when_nothing_answers(monkeypatch):
+    _quiet_env(monkeypatch)
+    monkeypatch.setattr("urllib.request.urlopen", mock.Mock(side_effect=OSError("down")))
+    assert resolve_avrone_base() is None
+    assert resolve_ck_base() is None
+
+
+def test_bare_blackboard_array_is_tolerated(monkeypatch):
+    _quiet_env(monkeypatch)
+
+    def fake(method, url, **kwargs):
+        if method == "GET" and "blackboard" in url:
+            return HopResult(ok=True, status=200, body=[
+                {
+                    "id": "find0000001",
+                    "kind": "finding",
+                    "text": "bare",
+                    "run_id": "r",
+                    "origin_node": "local",
+                }
+            ])
+        if method == "GET":
+            return HopResult(
+                ok=True,
+                status=200,
+                body={"mood": "neutral", "mood_dot": 0.5, "status": "ok", "version": "1"},
+            )
+        return HopResult(ok=True, status=200, body={"accepted": True, "duplicate": False})
+
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._request", fake)
+    monkeypatch.setattr("bridge.avrone_cyclekernal_link._sleep", lambda _delay: None)
+    stats = relay_loop(interval=0, max_cycles=1)
+    assert stats["forwarded"] == 1
     assert stats["errors"] == 0
 
 
-def test_relay_loop_soft_fail_on_blackboard_error():
-    with mock.patch("urllib.request.urlopen", side_effect=ConnectionError("nope")), mock.patch("time.sleep"):
-        stats = relay_loop(interval=0, max_cycles=2)
-    assert stats["forwarded"] == 0
-    assert stats["errors"] >= 2
+def test_docs_name_the_real_ports_and_the_contract_routes():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    contract = (ROOT / "CONTRACT.md").read_text(encoding="utf-8")
+    assert "8710" in readme and "8090" in readme
+    assert "frontend" in readme.lower()
+    for required in (
+        "/api/blackboard",
+        "/v1/events",
+        "/v1/current_mood",
+        "/health",
+        "/api/status",
+        "X-Admin-Token",
+        "4096",
+        "8710",
+        "8090",
+        "4000",
+    ):
+        assert required in contract

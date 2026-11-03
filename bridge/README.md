@@ -1,26 +1,22 @@
-# GreatScale-Avrone-Grok-Fusion-Bridge
+# Bridge package
 
-Real bridge between Avrone's agent blackboard and CycleKernal's CognitiveBridge.
-No fiction — every file here runs.
+`avrone_cyclekernal_link.py` is the relay. It reads `AVRONE_BASE` (default port **8710**) and `CK_BASE` (default port **8090**) on every call.
 
-## Components
+`avrone_shim.py` and `cognitive_bridge_standalone.py` are local stand-ins for the routes in `../CONTRACT.md`. Avrone does not serve `/api/blackboard`. CycleKernal does not serve `/v1/events`. The stand-ins do, so the loop can be run without those patches.
 
-- **avrone_cyclekernal_link.py** — event schema + HTTP clients + relay loop (fails soft on any dead hop)
-- **cognitive_bridge_standalone.py** — FastAPI CognitiveBridge on port 8090 (trait updates: mood, evidence, findings + decay)
-- **avrone_shim.py** — Flask blackboard shim on port 8710 (mirrors Avrone's real interface; swap for the Docker container later)
-- **test_integration.py** — starts both daemons, posts one finding, asserts the trait nudge, tears down
+`endpoint_resolver.py` probes Avrone at `GET /api/status` and CycleKernal at `GET /health`. A miss returns unreachable. It does not invent a second copy of the same URL.
 
-## Run
+## Run from the repo root
 
 ```bash
 pip install -r requirements.txt
-python cognitive_bridge_standalone.py   # terminal 1
-python avrone_shim.py                   # terminal 2
-python test_integration.py              # proves the loop
+pytest tests/ -v
+
+pip install -r bridge/requirements.txt
+python -m bridge.cognitive_bridge_standalone
+python -m bridge.avrone_shim
+python -m bridge.avrone_cyclekernal_link
+python bridge/test_integration.py
 ```
 
-## The gap this closes
-
-1. Avrone posts findings; CycleKernal never saw them → relay forwards them
-2. CycleKernal's mood stream never reached Avrone → health mirrored back
-3. greatscale evidence snapshots posted to nothing → same event schema catches them
+Set `FUSION_TOKEN` on all three processes when you want the stand-ins to require `X-Admin-Token`.
