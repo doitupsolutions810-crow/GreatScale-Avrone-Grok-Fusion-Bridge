@@ -8,16 +8,20 @@
   "avrone_blackboard_revision": "406e727cd478799f5a0bbe091d045e39710903a1",
   "resources": [
     {
+      "path": ".gitignore",
+      "sha256": "4cb18d750ab3d36453c88d0f1b380636848f501dadf444d3e442f2b7254ffe5f"
+    },
+    {
       "path": "CONTRACT.md",
       "sha256": "633f18f289fb915efe808afc285d869fb42cd5a9067589419a57a02108d1e223"
     },
     {
       "path": "README.md",
-      "sha256": "1d71c61e1ff323a868b9d943e9febc04040351db671b1ca8705baad2ce69d9f8"
+      "sha256": "d3f4a14b2e20debc644f8d3db13d560fcd294b0c8f7bcdd3ed2c8acda014fb9d"
     },
     {
       "path": "RECOVERY_VALIDATION.md",
-      "sha256": "d3816fc3c2e4f72416c6dbe79b5eb8bdfb582d8f10f764ee3bef977b0ee14df5"
+      "sha256": "a8d3fc7acea862e8131f072e8ad3ce8f8094369a391e23db2aa485c36c6d44c6"
     },
     {
       "path": "bridge/README.md",
@@ -76,6 +80,10 @@
       "sha256": "7976e5b8f70089d046ac7aeb74c405be06913d4eb236f4e1bd4df4d2d160f36f"
     },
     {
+      "path": "scripts/verify-live-peers.py",
+      "sha256": "934364e845108357f6f57f80c844dd7aaab08d7e349a782f99f62d1d2a440c30"
+    },
+    {
       "path": "scripts/verify-source-registry.py",
       "sha256": "20f91f56987fe8e40201569e441845b1cf8fb0ceee7c82519f4ac60343aa1099"
     },
@@ -98,6 +106,19 @@
     {
       "path": "tests/test_relay_integration.py",
       "sha256": "0783ecb30e51fd16bea196980aed7d0051172d51b5c4560e21ad6ceaed686ccf"
+    },
+    {
+      "path": "validation/live-peers.json",
+      "sha256": "3995b3321208e1105e1b9c42501bf72488ce3f7f6cd6e581f728ef9d2a02269e"
     }
-  ]
+  ],
+  "avrone_runtime_revision": "dd1e7258d38b4f0ab7e9d2dbddb31f037ea9f1e5",
+  "cycle_runtime_revision": "6e7cbec29e5185e41e314fc67d70a3ac24104ea6",
+  "validation": {
+    "python_passed": 52,
+    "cross_service_assertions": 21,
+    "relay_cycles": 50,
+    "report": "RECOVERY_VALIDATION.md",
+    "network_report": "validation/live-peers.json"
+  }
 }
