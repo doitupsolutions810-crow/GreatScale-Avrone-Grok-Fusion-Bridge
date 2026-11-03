@@ -6,9 +6,10 @@ What is real today (verified, not assumed):
   ``GET /api/status``. Run posts are readable at ``GET /api/runs/{run_id}/bridge``
   and are local-or-``X-Admin-Token``. There is no ``/blackboard`` and no
   ``/api/blackboard``.
-- CycleKernal CognitiveBridge listens on 8090. It serves ``GET /v1/current_mood``,
-  ``GET /health``, and ``WS /ws/hud``. It does not serve ``/events`` or
-  ``/api/events``.
+- CycleKernal CognitiveBridge listens on 8090 and serves ``GET /v1/current_mood``,
+  ``GET /health``, and ``WS /ws/hud``. ``POST /v1/events`` is implemented on
+  CycleKernal PR #14 (``X-Admin-Token``, 4096-byte 413 before auth,
+  ``duplicate: true``), not on ``main`` yet.
 
 This module speaks the contract in ``CONTRACT.md``. Until Avrone adds
 ``/api/blackboard`` and CycleKernal adds ``POST /v1/events``, those hops fail
@@ -23,6 +24,8 @@ projections are not posted again. Restart dedup is the state file at
 """
 from __future__ import annotations
 
+import contextvars
+import contextvars
 import json
 import os
 import socket
@@ -56,6 +59,74 @@ _sleep = time.sleep
 # A 400/413 will not start working on retry. A 404 might, once the other repo ships.
 _PERMANENT = frozenset({"too_large", "rejected"})
 _TRANSPORT = frozenset({"timeout", "transport"})
+# Opens the per-host breaker. A 500 responded; it is not a black hole.
+_BREAKER_ERRORS = frozenset({"timeout", "transport"})
+
+# One relay_loop call shares these across its cycles. A new call starts clean.
+_cycle_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar("fusion_deadline", default=None)
+_cycle_breaker: contextvars.ContextVar["_HostBreaker | None"] = contextvars.ContextVar("fusion_breaker", default=None)
+_cycle_stats: contextvars.ContextVar[dict | None] = contextvars.ContextVar("fusion_stats", default=None)
+
+
+def _host_of(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+class _HostBreaker:
+    """Skip a host that accepts connections and then does not answer.
+
+    The first timeout or refused connection opens the circuit. Further calls
+    to that host fail immediately until ``cooldown`` elapses, then one probe
+    is allowed. Threshold 0 disables the breaker.
+    """
+
+    def __init__(self, threshold: int, cooldown: float):
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self._hosts: dict[str, dict] = {}
+
+    def blocked(self, url: str) -> bool:
+        if self.threshold <= 0:
+            return False
+        state = self._hosts.get(_host_of(url))
+        if not state or not state["open"]:
+            return False
+        if time.monotonic() >= state["until"]:
+            if state["probing"]:
+                return True
+            state["probing"] = True
+            return False
+        return True
+
+    def observe(self, url: str, error: str | None) -> bool:
+        """Record the outcome. Return True when this call opened the circuit."""
+        if self.threshold <= 0:
+            return False
+        host = _host_of(url)
+        if error not in _BREAKER_ERRORS:
+            if error is None:
+                self._hosts.pop(host, None)
+            return False
+        state = self._hosts.setdefault(
+            host, {"failures": 0, "open": False, "until": 0.0, "probing": False}
+        )
+        state["failures"] += 1
+        state["probing"] = False
+        if state["open"] or state["failures"] < self.threshold:
+            if state["open"]:
+                state["until"] = time.monotonic() + self.cooldown
+            return False
+        state["open"] = True
+        state["until"] = time.monotonic() + max(0.0, self.cooldown)
+        return True
+
+
+def _idempotency_key(value: str) -> str:
+    key = (value or "").strip()
+    if not key or any(char in key for char in "\r\n\x00"):
+        return ""
+    return key[:200]
 
 
 @dataclass
@@ -115,7 +186,21 @@ def _request(
     raw: bytes | None = None,
     timeout: float = 5.0,
     token: str = "",
+    idempotency_key: str = "",
 ) -> HopResult:
+    breaker = _cycle_breaker.get()
+    if breaker is not None and breaker.blocked(url):
+        return HopResult(ok=False, error="circuit")
+    deadline_at = _cycle_deadline.get()
+    capped_by_deadline = False
+    if deadline_at is not None:
+        remaining = deadline_at - time.monotonic()
+        # Don't start a call that cannot finish inside this cycle.
+        if remaining <= 0.05:
+            return HopResult(ok=False, error="deadline")
+        if remaining < timeout:
+            capped_by_deadline = True
+            timeout = remaining
     headers = {"Accept": "application/json"}
     data = raw
     if data is None and body is not None:
@@ -124,41 +209,62 @@ def _request(
         headers["Content-Type"] = "application/json"
     if token:
         headers["X-Admin-Token"] = token
+    key = _idempotency_key(idempotency_key)
+    if key:
+        headers["Idempotency-Key"] = key
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = resp.read()
             if not payload:
-                return HopResult(ok=True, status=resp.status, body=None)
-            try:
-                parsed = json.loads(payload.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return HopResult(ok=False, status=resp.status, error="bad_json", body=payload[:120])
-            return HopResult(ok=True, status=resp.status, body=parsed)
+                result = HopResult(ok=True, status=resp.status, body=None)
+            else:
+                try:
+                    parsed = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    result = HopResult(ok=False, status=resp.status, error="bad_json", body=payload[:120])
+                else:
+                    result = HopResult(ok=True, status=resp.status, body=parsed)
     except urllib.error.HTTPError as exc:
         try:
             exc.read()
         except Exception:
             pass
-        return HopResult(ok=False, status=exc.code, error=_status_error(exc.code))
+        result = HopResult(ok=False, status=exc.code, error=_status_error(exc.code))
     except (TimeoutError, socket.timeout):
-        return HopResult(ok=False, error="timeout")
+        result = HopResult(ok=False, error="timeout")
     except urllib.error.URLError as exc:
         reason = exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
-            return HopResult(ok=False, error="timeout")
-        return HopResult(ok=False, error="transport", body=str(reason)[:200])
+            result = HopResult(ok=False, error="timeout")
+        else:
+            result = HopResult(ok=False, error="transport", body=str(reason)[:200])
     except OSError as exc:
-        return HopResult(ok=False, error="transport", body=str(exc)[:200])
+        result = HopResult(ok=False, error="transport", body=str(exc)[:200])
     except Exception as exc:
         # A peer that accepts and then drops the socket raises BadStatusLine,
         # which is not an OSError. That is still a dead hop, not a crash.
-        return HopResult(ok=False, error="transport", body=type(exc).__name__)
+        result = HopResult(ok=False, error="transport", body=type(exc).__name__)
+    stats = _cycle_stats.get()
+    if breaker is not None:
+        opened = breaker.observe(url, None if result.ok else result.error)
+        if opened and stats is not None:
+            stats["circuit_opened"] += 1
+    if capped_by_deadline and result.error == "timeout" and stats is not None:
+        stats["deadline_stops"] += 1
+    return result
 
 
 def _account(stats: dict, hop: HopResult) -> None:
-    stats["errors"] += 1
     err = hop.error or "transport"
+    # A skipped call did not touch the peer. Don't count it as a hop failure.
+    if err == "circuit":
+        stats["circuit_skipped"] += 1
+        return
+    if err == "deadline":
+        stats["deadline_stops"] += 1
+        return
+    stats["errors"] += 1
     if err == "timeout":
         stats["timeouts"] += 1
     elif err == "auth":
@@ -247,10 +353,23 @@ def _event_from_post(post: dict, pid: str, cfg: RelayConfig) -> FusionEvent:
     )
 
 
-def _send_bytes(url: str, raw: bytes | None, cfg: RelayConfig, token: str) -> HopResult:
+def _send_bytes(
+    url: str,
+    raw: bytes | None,
+    cfg: RelayConfig,
+    token: str,
+    idempotency_key: str,
+) -> HopResult:
     if raw is None:
         return HopResult(ok=False, error="too_large")
-    return _request("POST", url, raw=raw, timeout=cfg.timeout, token=token)
+    return _request(
+        "POST",
+        url,
+        raw=raw,
+        timeout=cfg.timeout,
+        token=token,
+        idempotency_key=idempotency_key,
+    )
 
 
 def deliver_to_cyclekernal(event: FusionEvent, cfg: RelayConfig | None = None) -> HopResult:
@@ -263,7 +382,13 @@ def deliver_to_cyclekernal(event: FusionEvent, cfg: RelayConfig | None = None) -
         "payload": event.payload,
         "ts": event.ts,
     }
-    return _send_bytes(cfg.ck_events_url, encode_bounded(body, cfg.max_body_bytes), cfg, cfg.ck_token)
+    return _send_bytes(
+        cfg.ck_events_url,
+        encode_bounded(body, cfg.max_body_bytes),
+        cfg,
+        cfg.ck_token,
+        event.id,
+    )
 
 
 def deliver_to_avrone(event: FusionEvent, cfg: RelayConfig | None = None) -> HopResult:
@@ -271,12 +396,16 @@ def deliver_to_avrone(event: FusionEvent, cfg: RelayConfig | None = None) -> Hop
     # Avrone's board only accepts its five kinds. Mood is a conclusion; health
     # and evidence land as findings. The structured projection is the text.
     kind = "conclusion" if event.kind == "mood" else "finding"
+    # The agent is also inside the text. A board that keeps only text still
+    # echoes cyclekernal:* and the next read will not forward it.
+    mirror = dict(event.payload)
+    mirror["agent"] = f"cyclekernal:{event.kind}"
     body = {
         "id": event.id,
-        "agent": f"cyclekernal:{event.kind}"[:80],
+        "agent": mirror["agent"][:80],
         "role": RELAY_ROLE,
         "kind": kind,
-        "text": json.dumps(event.payload, separators=(",", ":"), default=str),
+        "text": json.dumps(mirror, separators=(",", ":"), default=str),
         "run_id": event.run_id or RELAY_RUN,
         "refs": [],
         "origin_node": ORIGIN_NODE,
@@ -286,6 +415,7 @@ def deliver_to_avrone(event: FusionEvent, cfg: RelayConfig | None = None) -> Hop
         encode_bounded(body, cfg.max_body_bytes),
         cfg,
         cfg.avrone_token,
+        event.id,
     )
 
 
@@ -328,6 +458,9 @@ def _empty_stats(state_errors: int) -> dict:
         "last_backoff_s": 0.0,
         "duplicates": 0,
         "state_errors": state_errors,
+        "circuit_opened": 0,
+        "circuit_skipped": 0,
+        "deadline_stops": 0,
     }
 
 
@@ -447,6 +580,11 @@ def relay_loop(
     ``interval`` overrides ``FUSION_INTERVAL`` for the success path. Transport
     failures sleep the backoff instead, starting at ``FUSION_BACKOFF_BASE``
     and doubling up to ``FUSION_BACKOFF_MAX``, then reset after a clean cycle.
+
+    Each cycle stops at ``FUSION_CYCLE_DEADLINE``. A host that times out or
+    refuses a connection opens a circuit (``FUSION_BREAKER_THRESHOLD``,
+    default one failure) and later calls to that host return immediately
+    until ``FUSION_BREAKER_COOLDOWN`` elapses.
     """
     cfg = config or load_config()
     if interval is None:
@@ -455,45 +593,57 @@ def relay_loop(
     stats = _empty_stats(state_errors)
     backoff = cfg.backoff_base
     cycle = 0
-    while max_cycles <= 0 or cycle < max_cycles:
-        transport = False
-        failed, cursor = _pull_and_forward(cfg, stats, seen, cursor)
-        transport = transport or failed
-        if _mirror(
-            cfg,
-            stats,
-            seen,
-            cursor,
-            url=cfg.ck_mood_url,
-            kind="mood",
-            project=project_mood,
-            counter="mood_mirrored",
-        ):
-            transport = True
-        if _mirror(
-            cfg,
-            stats,
-            seen,
-            cursor,
-            url=cfg.ck_health_url,
-            kind="health",
-            project=project_health,
-            counter="health_mirrored",
-        ):
-            transport = True
-        _remember(stats, cfg.state_path, seen, cursor)
-        if transport:
-            delay = min(backoff, cfg.backoff_max)
-            stats["backoffs"] += 1
-            stats["last_backoff_s"] = delay
-            backoff = min(backoff * 2, cfg.backoff_max)
-            if delay > 0:
-                _sleep(delay)
-        else:
-            backoff = cfg.backoff_base
-            if interval > 0:
-                _sleep(interval)
-        cycle += 1
+    breaker = _HostBreaker(cfg.breaker_threshold, cfg.breaker_cooldown)
+    token_breaker = _cycle_breaker.set(breaker)
+    token_stats = _cycle_stats.set(stats)
+    try:
+        while max_cycles <= 0 or cycle < max_cycles:
+            deadline_at = time.monotonic() + cfg.cycle_deadline if cfg.cycle_deadline > 0 else None
+            token_deadline = _cycle_deadline.set(deadline_at)
+            try:
+                transport = False
+                failed, cursor = _pull_and_forward(cfg, stats, seen, cursor)
+                transport = transport or failed
+                if _mirror(
+                    cfg,
+                    stats,
+                    seen,
+                    cursor,
+                    url=cfg.ck_mood_url,
+                    kind="mood",
+                    project=project_mood,
+                    counter="mood_mirrored",
+                ):
+                    transport = True
+                if _mirror(
+                    cfg,
+                    stats,
+                    seen,
+                    cursor,
+                    url=cfg.ck_health_url,
+                    kind="health",
+                    project=project_health,
+                    counter="health_mirrored",
+                ):
+                    transport = True
+                _remember(stats, cfg.state_path, seen, cursor)
+                if transport:
+                    delay = min(backoff, cfg.backoff_max)
+                    stats["backoffs"] += 1
+                    stats["last_backoff_s"] = delay
+                    backoff = min(backoff * 2, cfg.backoff_max)
+                    if delay > 0:
+                        _sleep(delay)
+                else:
+                    backoff = cfg.backoff_base
+                    if interval > 0:
+                        _sleep(interval)
+                cycle += 1
+            finally:
+                _cycle_deadline.reset(token_deadline)
+    finally:
+        _cycle_breaker.reset(token_breaker)
+        _cycle_stats.reset(token_stats)
     stats["seen"] = len(seen)
     stats["cycles"] = cycle
     return stats

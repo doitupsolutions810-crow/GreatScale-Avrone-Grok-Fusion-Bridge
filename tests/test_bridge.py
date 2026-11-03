@@ -17,6 +17,7 @@ from bridge.contract import (
     clip_text,
     encode_bounded,
     fingerprint,
+    is_echo,
     project_health,
     project_mood,
 )
@@ -38,6 +39,9 @@ def _quiet_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "FUSION_BACKOFF_BASE",
         "FUSION_BACKOFF_MAX",
         "FUSION_INTERVAL",
+        "FUSION_CYCLE_DEADLINE",
+        "FUSION_BREAKER_THRESHOLD",
+        "FUSION_BREAKER_COOLDOWN",
         "FUSION_MAX_BODY_BYTES",
         "AVRONE_BLACKBOARD_PATH",
         "CK_EVENTS_PATH",
@@ -65,6 +69,9 @@ def test_defaults_match_upstream_ports(monkeypatch):
     assert cfg.status_path == "/api/status"
     assert cfg.max_body_bytes == 4096
     assert cfg.max_text_chars == 4000
+    assert cfg.cycle_deadline == 10.0
+    assert cfg.breaker_threshold == 1
+    assert cfg.breaker_cooldown == 30.0
 
 
 def test_path_and_token_overrides(monkeypatch):
@@ -79,6 +86,19 @@ def test_path_and_token_overrides(monkeypatch):
     assert cfg.avrone_base == "http://avrone.internal:8710"
     assert cfg.avrone_token == "av"
     assert cfg.ck_token == "ck"
+
+
+def test_cyclekernal_mirror_entries_are_echoes():
+    assert is_echo({"agent": "cyclekernal:health", "origin_node": "local", "role": "", "text": "x"})
+    assert is_echo({"agent": "  CycleKernal:mood", "text": "x"})
+    assert is_echo({"id": "ck-health-abc123", "agent": "unknown", "text": "status"})
+    assert is_echo({
+        "id": "srv1",
+        "agent": "unknown",
+        "origin_node": "local",
+        "text": '{"status":"ghost-online","agent":"cyclekernal:health"}',
+    })
+    assert not is_echo({"id": "find0000001", "agent": "scout", "origin_node": "local", "text": "heat"})
 
 
 def test_clip_and_body_cap():

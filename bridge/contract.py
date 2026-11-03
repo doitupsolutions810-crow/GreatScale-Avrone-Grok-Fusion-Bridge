@@ -255,13 +255,48 @@ def encode_bounded(body: dict, max_bytes: int) -> bytes | None:
     return None
 
 
+def is_mirrored_agent(value: Any) -> bool:
+    """True for the relay's own ``cyclekernal:<kind>`` agent, whatever the board kept."""
+    return str(value or "").strip().lower().startswith("cyclekernal:")
+
+
+def _text_is_mirror(text: Any) -> bool:
+    """A board that drops agent/role/origin still echoes the mirror JSON we wrote."""
+    if not isinstance(text, str) or not text.startswith("{") or "cyclekernal:" not in text.lower():
+        return False
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    return (
+        is_mirrored_agent(parsed.get("agent"))
+        or parsed.get("origin_node") == ORIGIN_NODE
+        or str(parsed.get("role") or "").strip() == RELAY_ROLE
+    )
+
+
 def is_echo(post: dict) -> bool:
-    """Posts this relay wrote. Forwarding them back to CycleKernal would loop."""
+    """Posts this relay wrote. Forwarding them back to CycleKernal loops health.
+
+    Live boards do not always keep ``origin_node`` and ``role``. A mirrored
+    entry is still recognizable when its agent is ``cyclekernal:*``, its id
+    is one this relay minted (``ck-health-``, ``ck-mood-``), or the text is
+    the mirror document with that agent embedded.
+    """
+    if not isinstance(post, dict):
+        return False
     if post.get("origin_node") == ORIGIN_NODE:
         return True
-    if post.get("role") == RELAY_ROLE:
+    if str(post.get("role") or "").strip() == RELAY_ROLE:
         return True
-    return str(post.get("agent") or "").startswith("cyclekernal:")
+    if is_mirrored_agent(post.get("agent")):
+        return True
+    pid = str(post.get("id") or "")
+    if pid.startswith(("ck-mood-", "ck-health-", "ck-evidence-")):
+        return True
+    return _text_is_mirror(post.get("text"))
 
 
 class Board:

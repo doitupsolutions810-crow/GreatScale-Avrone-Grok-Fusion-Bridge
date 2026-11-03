@@ -71,6 +71,9 @@ class RelayConfig:
     backoff_base: float
     backoff_max: float
     interval: float
+    cycle_deadline: float
+    breaker_threshold: int
+    breaker_cooldown: float
     state_path: str
     blackboard_path: str
     events_path: str
@@ -111,6 +114,13 @@ def load_config() -> RelayConfig:
     timeout = _env_float("FUSION_TIMEOUT", 5.0)
     if timeout <= 0:
         timeout = 5.0
+    # One black-hole attempt must not be repeated for every queued event.
+    # 10s covers a healthy batch and still cuts a 15s-per-event hang short.
+    cycle_deadline = _env_float("FUSION_CYCLE_DEADLINE", 10.0)
+    breaker_threshold = _env_int("FUSION_BREAKER_THRESHOLD", 1)
+    if breaker_threshold < 0:
+        breaker_threshold = 0
+    breaker_cooldown = _env_float("FUSION_BREAKER_COOLDOWN", 30.0)
     max_body = _env_int("FUSION_MAX_BODY_BYTES", MAX_BODY_BYTES)
     if max_body < 256:
         max_body = 256
@@ -128,6 +138,9 @@ def load_config() -> RelayConfig:
         backoff_base=backoff_base,
         backoff_max=backoff_max,
         interval=_env_float("FUSION_INTERVAL", 2.0),
+        cycle_deadline=cycle_deadline,
+        breaker_threshold=breaker_threshold,
+        breaker_cooldown=breaker_cooldown,
         state_path=_env_str("FUSION_STATE_PATH"),
         blackboard_path=_env_path("AVRONE_BLACKBOARD_PATH", BLACKBOARD_PATH),
         events_path=_env_path("CK_EVENTS_PATH", EVENTS_PATH),

@@ -7,7 +7,8 @@ Reviewed against upstream default-branch files (do not treat this as a claim tha
 | Repo | SHA | File |
 | --- | --- | --- |
 | [Avrone](https://github.com/doitupsolutions810-crow/Avrone) | `9bb0e750aa40947f7f78b6ef41dcfa9afe6ae202` | `avrone/server.py`, `avrone/bridge.py` |
-| [CycleKernal](https://github.com/doitupsolutions810-crow/CycleKernal) | `cbbcce9b6c3864e8710a5607033e351364dab605` | `src/bridge/main.py`, `master/src/bridge/main.py` |
+| [CycleKernal](https://github.com/doitupsolutions810-crow/CycleKernal) | `cbbcce9b6c3864e8710a5607033e351364dab605` on `main` | `src/bridge/main.py` had no event route |
+| [CycleKernal PR #14](https://github.com/doitupsolutions810-crow/CycleKernal/pull/14) | `6aa783bb561356b7d8a7ac63769439b00401d6ec` | `POST /v1/events` is implemented on that branch |
 
 ## Ports
 
@@ -29,6 +30,9 @@ This relay reads bases at call time:
 | `CK_MOOD_PATH` | `/v1/current_mood` |
 | `CK_HEALTH_PATH` | `/health` |
 | `AVRONE_STATUS_PATH` | `/api/status` |
+| `FUSION_CYCLE_DEADLINE` | `10` seconds. `0` disables the cap. |
+| `FUSION_BREAKER_THRESHOLD` | `1` failed dial (timeout or connection refused) opens the host. `0` disables it. |
+| `FUSION_BREAKER_COOLDOWN` | `30` seconds. While open, calls to that host are not sent. |
 
 `CK_EVENTS_PATH=/v1/feedback` reaches a route that **already exists** on CycleKernal's master bridge. That route logs the body and returns `{"status":"ingested"}`. It does not authenticate, does not cap the body, and does not store an id. Pointing the relay at it is not an implementation of this contract.
 
@@ -192,7 +196,21 @@ Mood is produced by LoopMem metrics (`map_metrics_to_traits`), not by inbound Av
 
 `master/src/bridge/main.py` also has `POST /v1/feedback`. That is not this contract. See Ports above.
 
-### Required: `POST /v1/events`
+### `POST /v1/events` (CycleKernal PR #14)
+
+Implemented on [PR #14](https://github.com/doitupsolutions810-crow/CycleKernal/pull/14) (`6aa783bb`), not yet on `main`. The relay already speaks it.
+
+What that branch serves:
+
+- `POST /v1/events` and the alias `POST /events`.
+- Auth: `X-Admin-Token`, `Authorization: Bearer`, or `X-Events-Token`. `CK_FUSION_TOKEN` wins over `FUSION_TOKEN`. `CK_EVENTS_TOKEN` and `CK_EVENTS_TOKEN_PREVIOUS` also match. No token configured is 403. A wrong token is 401 `{"detail":"Bad admin token"}`.
+- A declared or buffered body over 4096 bytes (or a lower `CK_EVENTS_MAX_BYTES`) is 413 **before** the token is checked. Exactly 4096 is accepted.
+- A repeated id, including one already evicted from the ring, returns `{"accepted": true, "duplicate": true, "id": "..."}` and does not append or replace. The route does not move mood.
+- `GET /health` also returns `mode`, `mood`, `relay`, and `events`. Those change every read. The relay still fingerprints only `status`, `version`, and `mood`, so a ticking relay counter cannot repost health.
+
+The relay also sends `Idempotency-Key` set to the Avrone entry id (the same string as the JSON `id`). PR #14 dedupes on that id and ignores the header. The header is there so a retry of the same entry is one key even for a proxy that never looks inside the body.
+
+### Required body (what PR #14 checks)
 
 ```
 POST /v1/events
@@ -255,9 +273,11 @@ This route stores and acknowledges the event. It does not have to move `mood` or
 
 One cycle, in order:
 
-1. `GET /api/blackboard`. Forward each new post with `POST /v1/events`. Skip posts whose `origin_node` is `fusion-bridge`, whose `role` is `cyclekernal-relay`, or whose `agent` starts with `cyclekernal:`.
-2. `GET /v1/current_mood`. If the stable projection changed, `POST /api/blackboard` a conclusion.
-3. `GET /health`. If the stable projection changed, `POST /api/blackboard` a finding.
+1. `GET /api/blackboard`. Forward each new post with `POST /v1/events` and `Idempotency-Key: <that post's id>`. Skip the relay's own mirrors: `origin_node` `fusion-bridge`, `role` `cyclekernal-relay`, agent `cyclekernal:*` (any kind after the colon, case-insensitive), ids minted as `ck-health-` / `ck-mood-` / `ck-evidence-`, or text that is the mirror JSON with that agent embedded. Health mirroring must not be posted back, or CycleKernal's `events` counter on `/health` would churn a new mirror every cycle.
+2. `GET /v1/current_mood`. If the stable projection changed, `POST /api/blackboard` a conclusion whose text includes `"agent":"cyclekernal:mood"`.
+3. `GET /health`. If the stable projection changed, `POST /api/blackboard` a finding whose text includes `"agent":"cyclekernal:health"`.
+
+Each cycle has a deadline (`FUSION_CYCLE_DEADLINE`, default 10s). A request uses `min(FUSION_TIMEOUT, time left in the cycle)` and a cycle will not start a call with less than 50ms left. A host that times out or refuses the connection opens a circuit after `FUSION_BREAKER_THRESHOLD` failures (default 1). Further calls to that same origin are not sent until `FUSION_BREAKER_COOLDOWN` (default 30s); then one probe is allowed. A 500 is not a black hole and does not open the circuit. This is what stops a CycleKernal that accepts the TCP connection and never answers from costing a full timeout per queued event (a live run paid about 15s per event, 215s for 21 events).
 
 An id is remembered only after a 2xx, or after a permanent 4xx (400, 413, other non-auth 4xx). Timeouts, connection failures, 401/403, 404/405, and 5xx leave the id unseen so a later cycle retries it. A transport failure backs off from `FUSION_BACKOFF_BASE` (default 0.5s), doubling to `FUSION_BACKOFF_MAX` (default 8s), and the multiplier resets after a cycle with no transport failure. 404 and 500 do not use that backoff; they wait for `FUSION_INTERVAL`.
 

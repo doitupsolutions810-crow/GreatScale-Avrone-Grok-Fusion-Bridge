@@ -10,7 +10,7 @@ Relay between Avrone's learning bridge and CycleKernal's CognitiveBridge.
 
 Port 8080 is CycleKernal's frontend container, not Avrone. The relay default used to disagree with one of the READMEs; both now follow the server defaults above.
 
-The exact bytes the other two repositories must accept are in [CONTRACT.md](CONTRACT.md). Short version: Avrone still has no blackboard route, and CycleKernal still has no event ingest. The relay calls the routes that document requires (`GET`/`POST /api/blackboard`, `POST /v1/events`) and the reads that already exist (`/v1/current_mood`, `/health`, probe `/api/status`). Until those two new routes ship upstream, the corresponding hop records an error and the process keeps going.
+The exact bytes are in [CONTRACT.md](CONTRACT.md). Avrone still has no blackboard route. CycleKernal [PR #14](https://github.com/doitupsolutions810-crow/CycleKernal/pull/14) serves `POST /v1/events` with `X-Admin-Token`, a 4096-byte 413 before auth, and `duplicate: true`; that is not on `main` yet. The relay calls `GET`/`POST /api/blackboard`, `POST /v1/events`, and the reads that already exist (`/v1/current_mood`, `/health`, probe `/api/status`). A missing hop records an error and the process keeps going. Each cycle has a deadline, and a host that accepts a connection but never answers is skipped instead of being dialed once per event.
 
 ## Configure
 
@@ -29,6 +29,9 @@ Read on every call, not at import.
 | `FUSION_INTERVAL` | `2` | Sleep after a clean cycle. |
 | `FUSION_BACKOFF_BASE` | `0.5` | First sleep after a timeout or a refused connection. Doubles. |
 | `FUSION_BACKOFF_MAX` | `8` | Cap on that sleep. |
+| `FUSION_CYCLE_DEADLINE` | `10` | Seconds one cycle may spend dialing. `0` turns it off. |
+| `FUSION_BREAKER_THRESHOLD` | `1` | Timeouts or refused connections before that host is skipped. `0` turns it off. |
+| `FUSION_BREAKER_COOLDOWN` | `30` | Seconds to skip a host after the breaker opens. |
 | `FUSION_STATE_PATH` | empty | Seen-id file. Empty means memory only. |
 | `FUSION_CYCLES` | `3` when run as a module | `0` runs until interrupted. |
 | `AVRONE_SHIM_BASE` | empty | Second liveness candidate for the resolver. Used only when it differs from `AVRONE_BASE`. |
@@ -64,7 +67,7 @@ With the token unset, the stand-ins allow the call so a loopback demo can start.
 
 ## Gaps that remain
 
-- Avrone does not implement `/api/blackboard`. CycleKernal `src/bridge/main.py` does not implement `POST /v1/events`. The relay cannot deliver to the real processes until those patches land. CONTRACT.md is the patch spec.
+- Avrone does not implement `/api/blackboard`. CycleKernal `POST /v1/events` exists on [PR #14](https://github.com/doitupsolutions810-crow/CycleKernal/pull/14) and not yet on `main`. Until both are deployed, that hop fails soft.
 - greatscale evidence is a reserved `source` / `kind`. Nothing in this repo produces it.
 - The relay polls. It does not subscribe to `/ws/events` or `/ws/hud`.
 - Delivery is at-least-once. A lost state file is safe only because the peer dedups ids.

@@ -109,10 +109,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         query = parse_qs(urlparse(self.path).query)
-        with stub.lock:
-            delay = stub.delay.get(f"{method} {path}", stub.delay.get(path, 0.0))
-        if delay:
-            time.sleep(delay)
         body = b""
         if method == "POST":
             try:
@@ -131,11 +127,21 @@ class _Handler(BaseHTTPRequestHandler):
                 return
         token = self.headers.get("X-Admin-Token")
         with stub.lock:
-            stub.hits.append({"method": method, "path": path, "token": token, "n": len(body)})
+            # Record before any stall so a client that times out can still see the attempt.
+            stub.hits.append({
+                "method": method,
+                "path": path,
+                "token": token,
+                "n": len(body),
+                "idempotency": self.headers.get("Idempotency-Key"),
+            })
             if method == "POST":
                 stub.bodies.append((path, body))
+            delay = stub.delay.get(f"{method} {path}", stub.delay.get(path, 0.0))
             forced = stub.fail.get(path)
             raw = stub.raw.get(path) if method == "GET" else None
+        if delay:
+            time.sleep(delay)
         if path not in _routes(stub.kind):
             self._send(404, {"detail": "not found"})
             return
@@ -184,7 +190,13 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/health":
             with stub.lock:
                 payload = dict(stub.health)
+                stored = len(stub.log.events)
+            # Same extras CycleKernal PR #14 puts on /health. They change every
+            # read; the relay must not treat that as a new health snapshot.
             payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+            payload["mode"] = "relay"
+            payload["events"] = {"accepted": stored, "tick": time.time()}
+            payload["relay"] = {"attempts": time.time(), "connected": True}
             self._send(200, payload)
             return
         if path == "/v1/current_mood":

@@ -146,7 +146,13 @@ def test_happy_path_forwards_once_and_mirrors(peers):
     mirrors = [post for post in posts if post["origin_node"] == "fusion-bridge"]
     assert {post["kind"] for post in mirrors} == {"conclusion", "finding"}
     assert all(post["role"] == "cyclekernal-relay" for post in mirrors)
-    assert any(hit["path"] == "/v1/events" and hit["token"] == TOKEN for hit in ck.hits)
+    assert any(
+        hit["path"] == "/v1/events" and hit["token"] == TOKEN and hit["idempotency"] == "find0000001"
+        for hit in ck.hits
+    )
+    mirror_keys = [hit["idempotency"] for hit in av.hits if hit["method"] == "POST"]
+    assert mirror_keys
+    assert all(key.startswith(("ck-mood-", "ck-health-")) for key in mirror_keys)
     assert any(hit["path"] == "/api/blackboard" and hit["method"] == "GET" and hit["token"] == TOKEN for hit in av.hits)
     assert any(hit["path"] == "/v1/current_mood" and not hit["token"] for hit in ck.hits)
     assert all(len(body) <= 4096 for _, body in ck.bodies)
@@ -318,10 +324,14 @@ def test_dead_hop_times_out_or_refuses_and_backs_off(tmp_path, monkeypatch):
     stats = relay_loop(interval=0, max_cycles=2)
     elapsed = time.monotonic() - started
     assert stats["forwarded"] == 0
-    assert stats["backoffs"] == 2
-    assert stats["last_backoff_s"] == pytest.approx(0.1)
+    # The first cycle pays for one refused connection per host and backs off.
+    # The second cycle is inside the breaker cooldown, so it does not dial again.
+    assert stats["backoffs"] == 1
+    assert stats["last_backoff_s"] == pytest.approx(0.05)
+    assert stats["circuit_opened"] >= 1
+    assert stats["circuit_skipped"] >= 1
     assert stats["timeouts"] + stats["transport_errors"] >= 2
-    assert elapsed < 5
+    assert elapsed < 2
 
 
 def test_blackboard_read_timeout_backs_off_and_still_mirrors(peers, monkeypatch):
@@ -336,10 +346,94 @@ def test_blackboard_read_timeout_backs_off_and_still_mirrors(peers, monkeypatch)
     assert stats["timeouts"] >= 1, stats
     assert stats["backoffs"] == 1
     assert stats["forwarded"] == 0
-    assert stats["mood_mirrored"] == 1
-    assert elapsed < 5
+    # Avrone already failed to answer. Don't spend another timeout posting the mirror there.
+    assert stats["mood_mirrored"] == 0
+    assert stats["circuit_skipped"] >= 1
+    assert elapsed < 2
     # The unread finding is not acked, so a later cycle still delivers it.
     av.delay.clear()
     monkeypatch.setenv("FUSION_TIMEOUT", "0.4")
     recovered = relay_loop(interval=0, max_cycles=1)
     assert recovered["forwarded"] == 1
+    assert recovered["mood_mirrored"] == 1
+
+
+def test_cyclekernal_mirrors_are_not_forwarded(peers):
+    """Health mirrors must not be posted back to CycleKernal, even if the board drops origin."""
+    av, ck = peers
+    av.inject_post(_finding())
+    av.inject_post({
+        "id": "ck-health-deadbeef0001",
+        "agent": "cyclekernal:health",
+        "role": "",
+        "kind": "finding",
+        "text": '{"status":"ghost-online","version":"3.1.0"}',
+        "run_id": "fusion-relay",
+        "origin_node": "local",
+        "refs": [],
+        "ts": 1.0,
+    })
+    av.inject_post({
+        "id": "srvassigned01",
+        "agent": "unknown",
+        "role": "agent",
+        "kind": "finding",
+        "text": json.dumps({"status": "ghost-online", "agent": "cyclekernal:health"}),
+        "run_id": "run-1",
+        "origin_node": "local",
+        "refs": [],
+        "ts": 1.0,
+    })
+    stats = relay_loop(interval=0, max_cycles=3)
+    assert stats["forwarded"] == 1
+    assert [event["id"] for event in ck.log.list()] == ["find0000001"]
+    ours = [post for post in av.board.export() if post.get("origin_node") == "fusion-bridge"]
+    assert ours
+    assert all("cyclekernal:" in post["text"] for post in ours)
+
+
+def test_black_hole_host_does_not_cost_a_timeout_per_event(peers, monkeypatch):
+    av, ck = peers
+    for index in range(21):
+        av.inject_post(_finding(f"find{index:08d}", f"event {index}"))
+    for path in ("/v1/events", "/v1/current_mood", "/health"):
+        ck.delay[path] = 30.0
+    monkeypatch.setenv("FUSION_TIMEOUT", "0.3")
+    monkeypatch.setenv("FUSION_CYCLE_DEADLINE", "10")
+    monkeypatch.setenv("FUSION_BREAKER_THRESHOLD", "1")
+    monkeypatch.setenv("FUSION_BREAKER_COOLDOWN", "30")
+    started = time.monotonic()
+    stats = relay_loop(interval=0, max_cycles=2)
+    elapsed = time.monotonic() - started
+    event_hits = [hit for hit in ck.hits if hit["path"] == "/v1/events"]
+    assert len(event_hits) == 1, (len(event_hits), stats)
+    assert event_hits[0]["idempotency"] == "find00000000"
+    assert stats["forwarded"] == 0
+    assert stats["timeouts"] == 1
+    assert stats["circuit_opened"] == 1
+    assert stats["circuit_skipped"] >= 1
+    # 21 events at 0.3s would be over 6s. One attempt plus the cooldown skip is not.
+    assert elapsed < 1.5, elapsed
+    for path in ("/v1/events", "/v1/current_mood", "/health"):
+        ck.delay.pop(path, None)
+    recovered = relay_loop(interval=0, max_cycles=1)
+    assert recovered["forwarded"] == 21
+    assert len(ck.log.list()) == 21
+
+
+def test_cycle_deadline_stops_a_hang_when_the_breaker_is_off(peers, monkeypatch):
+    av, ck = peers
+    for index in range(21):
+        av.inject_post(_finding(f"due{index:08d}", f"due {index}"))
+    ck.delay["/v1/events"] = 30.0
+    monkeypatch.setenv("FUSION_TIMEOUT", "5")
+    monkeypatch.setenv("FUSION_CYCLE_DEADLINE", "0.4")
+    monkeypatch.setenv("FUSION_BREAKER_THRESHOLD", "0")
+    started = time.monotonic()
+    stats = relay_loop(interval=0, max_cycles=1)
+    elapsed = time.monotonic() - started
+    event_hits = [hit for hit in ck.hits if hit["path"] == "/v1/events"]
+    assert len(event_hits) == 1, (len(event_hits), stats)
+    assert stats["deadline_stops"] >= 1
+    assert stats["forwarded"] == 0
+    assert elapsed < 1.5, elapsed
