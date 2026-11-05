@@ -177,6 +177,126 @@ class LinkTests(unittest.TestCase):
                               opener=lambda *a, **k: BrokenRead(b""))
         self.assertNotIn("body-token", str(caught.exception))
 
+    def test_transport_cyclekernel_errors_are_sanitized(self):
+        secret = "credential=TOP_SECRET_X91"
+        def broken_opener(*args, **kwargs):
+            raise CycleKernelLinkError(secret)
+        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+            fetch_observation("http://localhost:5000", "/health", opener=broken_opener)
+        self.assertNotIn(secret, str(caught.exception))
+
+        class BrokenClose(Response):
+            def close(self):
+                raise CycleKernelLinkError(secret)
+        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: BrokenClose(json.dumps(health()).encode()))
+        self.assertNotIn(secret, str(caught.exception))
+
+        class BrokenHeaders:
+            def get(self, *args, **kwargs):
+                raise CycleKernelLinkError(secret)
+        class BrokenHeaderResponse(Response):
+            headers = BrokenHeaders()
+        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: BrokenHeaderResponse(json.dumps(health()).encode()))
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_http_error_diagnostics_do_not_trust_custom_code(self):
+        from urllib.error import HTTPError
+        secret = "authorization=HTTP_SECRET_Z77"
+        def broken(*args, **kwargs):
+            raise HTTPError("http://localhost:5000/health", secret, secret, {}, None)
+        with self.assertRaises(CycleKernelLinkError) as caught:
+            fetch_observation("http://localhost:5000", "/health", opener=broken)
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_rejects_hostile_builtin_subclasses_at_trust_boundaries(self):
+        class EvilPath(str):
+            def __new__(cls): return super().__new__(cls, "/admin")
+            def __hash__(self): return hash("/health")
+            def __eq__(self, other): return other == "/health"
+        class EvilFloat(float):
+            def __lt__(self, other): return False
+            def __gt__(self, other): return False
+        class EvilInt(int):
+            def __new__(cls, value=0): return super().__new__(cls, value)
+            def __lt__(self, other): return False
+            def __gt__(self, other): return False
+        class EvilUrl(str):
+            def __new__(cls): return super().__new__(cls, "ftp://evil.invalid")
+            def strip(self, *args, **kwargs): return "http://localhost:5000"
+        class EvilHeader(str):
+            def strip(self, *args, **kwargs): return "application/json"
+            def split(self, *args, **kwargs): return ["application/json"]
+            def lower(self): return "application/json"
+        class EvilStatus(int):
+            def __new__(cls): return super().__new__(cls, 500)
+            def __ne__(self, other): return False
+        class EvilBytes(bytes):
+            def decode(self, *args, **kwargs):
+                return json.dumps(health())
+        class EvilDict(dict):
+            def get(self, *args, **kwargs): return "healthy"
+        class SpoofKey(str):
+            def __new__(cls): return super().__new__(cls, "not-status")
+            def __hash__(self): return hash("status")
+            def __eq__(self, other): return other == "status"
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", EvilPath(), opener=lambda *a, **k: None)
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation(EvilUrl(), "/health", opener=lambda *a, **k: None)
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health", timeout=EvilFloat(999), opener=lambda *a, **k: None)
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation(EvilPath(), health())
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation("/health", EvilDict())
+        spoofed = health()
+        spoofed[SpoofKey()] = "healthy"
+        spoofed.pop("status")
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation("/health", spoofed)
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation("/health", {**health(), "promoted": EvilInt(0)})
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation("/colony", {"active": 3, "promoted": 1, "held": 2,
+                "dormant": 0, "genome_id": "g", "mood_dot": EvilFloat(0.5)})
+        nested_spoof = {"universes": {"U1": {"civilizations": {"c1": {}, "c2": {}, "c3": {}}, "cycle_count": 7}},
+            "total_civilizations": 3, "colony": {"universes": {"U1": {}}}, "audit_logs": []}
+        class SpoofUniverseKey(str):
+            def __new__(cls): return super().__new__(cls, "not-U1")
+            def __hash__(self): return hash("U1")
+            def __eq__(self, other): return other == "U1"
+        nested_spoof["universes"][SpoofUniverseKey()] = nested_spoof["universes"].pop("U1")
+        with self.assertRaises(CycleKernelLinkError):
+            validate_observation("/state", nested_spoof)
+
+        class HeaderResponse(Response):
+            headers = {"Content-Type": EvilHeader("text/plain")}
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: HeaderResponse(json.dumps(health()).encode()))
+
+        class StatusResponse(Response):
+            status = EvilStatus()
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: StatusResponse(json.dumps(health()).encode()))
+
+        class MissingStatusResponse:
+            headers = {"Content-Type": "application/json"}
+            def read(self, n=-1): return json.dumps(health()).encode()
+            def close(self): pass
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: MissingStatusResponse())
+
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: Response(EvilBytes(b"not-json")))
+
     def test_redirects_are_not_followed(self):
         from urllib.error import HTTPError
         def redirect(*args, **kwargs):
