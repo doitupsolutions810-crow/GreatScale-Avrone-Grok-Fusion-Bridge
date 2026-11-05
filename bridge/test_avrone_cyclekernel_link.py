@@ -78,7 +78,9 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Bad(b"{}"))
         for media_type in ("text/plain", "application/jsonp", "application/xml",
                            "application/octet-stream", "application/+json",
-                           "application/++json", "application/foo bar+json"):
+                           "application/++json", "application/foo bar+json",
+                           "application/*+json", "application/.foo+json",
+                           "application/%foo+json"):
             class WrongType(Response):
                 headers={"Content-Type":media_type}
             with self.subTest(content_type=media_type), self.assertRaises(CycleKernelLinkError):
