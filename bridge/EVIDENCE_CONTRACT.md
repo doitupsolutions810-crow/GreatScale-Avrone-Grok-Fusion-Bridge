@@ -11,3 +11,22 @@ Run focused tests from this directory:
 Security boundary: SHA-256 is not a digital signature or proof of source identity.
 Capability and human-root fields are references only. This adapter does not
 authorize privileged actions or independently verify capability authority.
+
+
+## CycleKernel observation link
+
+`avrone_cyclekernal_link.py` provides a read-only adapter for the documented
+`GET /health`, `GET /state`, and `GET /colony` endpoints. It rejects other
+routes, credentials embedded in base URLs, redirects, malformed or ambiguous
+JSON, non-finite JSON constants, oversized payloads, invalid response schemas,
+and unbounded timeout values. The transport timeout is capped at 30 seconds
+and the response body at 1 MiB.
+
+The base URL must come from trusted deployment configuration, not a request
+parameter or untrusted agent output. This adapter does not itself establish
+network destination trust, authenticate the CycleKernel service, or grant
+capability authority. Its SHA-256 observation digest is content-integrity
+metadata only; it is not a signature or proof of source identity.
+
+Run the focused adapter tests from `bridge/` with:
+`python -m unittest -v test_avrone_cyclekernel_link`
