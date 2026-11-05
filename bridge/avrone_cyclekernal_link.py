@@ -23,6 +23,11 @@ def _header_values(headers: Any, name: str) -> list[Any]:
         if type(values) is not list:
             raise CycleKernelLinkError("CycleKernel response headers are malformed")
         return values
+    if type(headers) is dict:
+        if any(type(key) is not str for key in headers):
+            raise CycleKernelLinkError("CycleKernel response headers are malformed")
+        normalized_name = name.lower()
+        return [value for key, value in headers.items() if key.lower() == normalized_name]
     getter = getattr(headers, "get", None)
     if callable(getter):
         value = getter(name)
@@ -274,7 +279,9 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
                 raise CycleKernelLinkError("CycleKernel response body does not match Content-Length")
         finally:
             close = getattr(response, "close", None)
-            if callable(close): close()
+            if not callable(close):
+                raise CycleKernelLinkError("CycleKernel response has no callable close method")
+            close()
     except HTTPError as exc:
         try:
             exc.close()
