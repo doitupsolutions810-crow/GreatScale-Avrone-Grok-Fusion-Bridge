@@ -1,5 +1,5 @@
 import copy, math, unittest
-from greatscale_evidence import EvidenceContractError, MAX_DEPTH, MAX_RUNS, build_evidence_event, evidence_snapshot, verify_evidence_event
+from greatscale_evidence import EvidenceContractError, MAX_DEPTH, MAX_REF, MAX_RUNS, build_evidence_event, evidence_snapshot, verify_evidence_event
 
 class ContractEdges(unittest.TestCase):
  def test_roundtrip_digest_and_ref_dedupe(self):
