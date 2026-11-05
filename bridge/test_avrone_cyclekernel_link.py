@@ -76,10 +76,18 @@ class LinkTests(unittest.TestCase):
             status=503
         with self.assertRaises(CycleKernelLinkError):
             fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Bad(b"{}"))
-        class Text(Response):
-            headers={"Content-Type":"text/plain"}
-        with self.assertRaises(CycleKernelLinkError):
-            fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Text(b"{}"))
+        for media_type in ("text/plain", "application/jsonp", "application/xml",
+                           "application/octet-stream"):
+            class WrongType(Response):
+                headers={"Content-Type":media_type}
+            with self.subTest(content_type=media_type), self.assertRaises(CycleKernelLinkError):
+                fetch_observation("http://localhost:5000","/health",
+                                  opener=lambda *a,**k:WrongType(b"{}"))
+        class ParameterizedJSON(Response):
+            headers={"Content-Type":"Application/JSON; charset=utf-8"}
+        result=fetch_observation("http://localhost:5000","/health",
+                                 opener=lambda *a,**k:ParameterizedJSON(json.dumps(health()).encode()))
+        self.assertEqual(result["data"],health())
 
     def test_malformed_json_and_oversized_payload_fail_closed(self):
         for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b'{"mood_dot":1e999}', b'{"promoted":'+b'9'*5000+b'}', b"x"*(MAX_RESPONSE_BYTES+1)]:
