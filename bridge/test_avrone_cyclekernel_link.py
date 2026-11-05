@@ -2,6 +2,8 @@ import io
 import json
 import unittest
 
+import avrone_cyclekernal_link as m
+
 from avrone_cyclekernal_link import (
     CycleKernelLinkError, fetch_observation, observation_digest,
     validate_observation, MAX_RESPONSE_BYTES,
@@ -46,6 +48,24 @@ class LinkTests(unittest.TestCase):
                     "http://localhost:99999", "http://localhost:abc"]:
             with self.subTest(url=url), self.assertRaises(CycleKernelLinkError):
                 fetch_observation(url,"/health")
+
+    def test_ambiguous_or_noncanonical_url_authorities_are_rejected(self):
+        invalid = [
+            "http://example.com:", "http://example.com:/", "http://%65xample.com",
+            "http://example.com%2f.evil", "http://127.1", "http://0177.0.0.1",
+            "http://2130706433", "http://0x7f000001", "http://example..com",
+            "http://-bad.example", "http://bad-.example", "http://foo_bar.example",
+            "http://.example", "http://example.com:00080",
+        ]
+        for url in invalid:
+            with self.subTest(url=url), self.assertRaises(CycleKernelLinkError):
+                fetch_observation(url, "/health", opener=lambda *a, **k: None)
+        valid = ["http://localhost:5000", "http://cyclekernel:5000",
+                 "https://example.com", "http://127.0.0.1", "https://[::1]:8443",
+                 "http://example.com."]
+        for url in valid:
+            with self.subTest(valid_url=url):
+                self.assertTrue(m._base_url(url).startswith(("http://", "https://")))
 
     def test_write_or_unknown_routes_rejected_before_network(self):
         for path in ["/simulate/1","/chat/interact","/admin","/health/", None, [], {}]:
@@ -103,6 +123,89 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000","/health",
                               opener=lambda *a,**k:MissingType(b"{}"))
 
+    def test_ambiguous_http_framing_headers_fail_closed(self):
+        from email.message import Message
+        raw = json.dumps(health()).encode()
+        cases = {
+            "duplicate_content_length": [("Content-Length", str(len(raw))), ("Content-Length", str(len(raw) + 1))],
+            "duplicate_transfer_encoding": [("Transfer-Encoding", "chunked"), ("Transfer-Encoding", "chunked")],
+            "transfer_encoding_and_content_length": [("Transfer-Encoding", "chunked"), ("Content-Length", str(len(raw)))],
+            "unsupported_transfer_encoding": [("Transfer-Encoding", "gzip")],
+            "invalid_content_length": [("Content-Length", "42, 42")],
+            "negative_content_length": [("Content-Length", "-1")],
+            "oversized_content_length": [("Content-Length", str(MAX_RESPONSE_BYTES + 1))],
+        }
+        for label, framing in cases.items():
+            headers = Message()
+            headers.add_header("Content-Type", "application/json")
+            for name, value in framing:
+                headers.add_header(name, value)
+            class FramingResponse(Response):
+                pass
+            response = FramingResponse(raw)
+            response.headers = headers
+            with self.subTest(case=label), self.assertRaises(CycleKernelLinkError):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: response)
+
+        headers = Message()
+        headers.add_header("Content-Type", "application/json")
+        headers.add_header("Content-Length", str(len(raw)))
+        class ValidLengthResponse(Response):
+            pass
+        response = ValidLengthResponse(raw)
+        response.headers = headers
+        self.assertEqual(fetch_observation("http://localhost:5000", "/health",
+                                           opener=lambda *a, **k: response)["data"], health())
+
+    def test_duplicate_content_type_headers_fail_closed(self):
+        class DuplicateHeaders:
+            def get(self, key, default=""):
+                return "application/json"
+            def get_all(self, key):
+                return ["application/json", "text/plain"]
+        class DuplicateResponse(Response):
+            headers = DuplicateHeaders()
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: DuplicateResponse(json.dumps(health()).encode()))
+
+        class RepeatedSameHeader(DuplicateHeaders):
+            def get_all(self, key):
+                return ["application/json", "application/json"]
+        class RepeatedResponse(Response):
+            headers = RepeatedSameHeader()
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: RepeatedResponse(json.dumps(health()).encode()))
+
+    def test_content_type_parameters_are_fully_validated(self):
+        valid = [
+            "application/json", "APPLICATION/JSON", " application/json ",
+            "application/json; charset=utf-8", 'application/json; charset="utf-8"',
+            "application/json ; version = 1", "application/vnd.avrone+json; profile=compact",
+        ]
+        invalid = [
+            "application/json;", "application/json; x:y", "application/json; charset=bad value",
+            'application/json; charset="unterminated', 'application/json; charset="bad"quote"',
+            "application/json; charset=utf-8; charset=latin-1", "application/json;\r\n x:y",
+            "application/json\r\nX-Evil: y", "application/json\x00", "application/json\x7f",
+            "application/json\u200b", "application/json; charset=\u00e9", "text/plain; x=y",
+            "application/not-json+html",
+        ]
+        for ctype in valid:
+            class ValidResponse(Response):
+                headers = {"Content-Type": ctype}
+            with self.subTest(valid=ctype):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: ValidResponse(json.dumps(health()).encode()))
+        for ctype in invalid:
+            class InvalidResponse(Response):
+                headers = {"Content-Type": ctype}
+            with self.subTest(invalid=ctype), self.assertRaises(CycleKernelLinkError):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: InvalidResponse(json.dumps(health()).encode()))
+
     def test_malformed_json_and_oversized_payload_fail_closed(self):
         for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b'{"mood_dot":1e999}', b'{"promoted":'+b'9'*5000+b'}', b"x"*(MAX_RESPONSE_BYTES+1)]:
             with self.subTest(length=len(raw)), self.assertRaises(CycleKernelLinkError):
@@ -151,6 +254,19 @@ class LinkTests(unittest.TestCase):
         with self.assertRaises(CycleKernelLinkError):
             fetch_observation("http://localhost:5000", "/health", opener=lambda *a, **k: wrong)
         self.assertTrue(wrong.closed)
+
+    def test_falsey_callable_transport_is_not_discarded(self):
+        calls = []
+        class FalseyOpener:
+            def __bool__(self): return False
+            def __call__(self, request, timeout):
+                calls.append((request.full_url, request.get_method(), timeout))
+                return Response(json.dumps(health()).encode())
+        result = fetch_observation("http://localhost:5000", "/health", timeout=1,
+                                   opener=FalseyOpener())
+        self.assertEqual(result["data"], health())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1:], ("GET", 1.0))
 
     def test_non_callable_transport_override_is_rejected(self):
         with self.assertRaises(CycleKernelLinkError):
@@ -202,6 +318,16 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: BrokenHeaderResponse(json.dumps(health()).encode()))
         self.assertNotIn(secret, str(caught.exception))
+
+    def test_transport_exception_class_name_is_not_disclosed(self):
+        secret_name = "credential_TOP_SECRET_DYNAMIC"
+        SecretException = type(secret_name, (Exception,), {})
+        def broken(*args, **kwargs):
+            raise SecretException("untrusted exception text")
+        with self.assertRaises(CycleKernelLinkError) as caught:
+            fetch_observation("http://localhost:5000", "/health", opener=broken)
+        self.assertNotIn(secret_name, str(caught.exception))
+        self.assertNotIn("untrusted exception text", str(caught.exception))
 
     def test_http_error_diagnostics_do_not_trust_custom_code(self):
         from urllib.error import HTTPError
