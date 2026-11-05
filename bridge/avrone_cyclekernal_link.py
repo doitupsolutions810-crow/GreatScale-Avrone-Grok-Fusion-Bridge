@@ -1,6 +1,6 @@
 """Read-only CycleKernel adapter. No mutation endpoints; bounded HTTP and payload size."""
 from __future__ import annotations
-import hashlib, json, math, re, time, unicodedata
+import hashlib, ipaddress, json, math, re, time, unicodedata
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -9,7 +9,69 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_RESPONSE_BYTES = 1_048_576
 DEFAULT_TIMEOUT_SECONDS = 3.0
 _ALLOWED_PATHS = {"/health", "/state", "/colony"}
-_JSON_MEDIA_TYPE = re.compile(r"^application/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\+json$")
+_JSON_MEDIA_TYPE = re.compile(r"^application/[A-Za-z0-9][A-Za-z0-9!#$%&'*+.^_\x60|~-]*\+json$", re.IGNORECASE)
+_CONTENT_TYPE_TOKEN = re.compile(r"^[!#$%&'*+.^_\x60|~0-9A-Za-z-]+$")
+
+
+def _header_values(headers: Any, name: str) -> list[Any]:
+    """Return all instances of a response header where the HTTP stack exposes them."""
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        values = get_all(name)
+        if values is None:
+            return []
+        if type(values) is not list:
+            raise CycleKernelLinkError("CycleKernel response headers are malformed")
+        return values
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(name)
+        return [] if value is None else [value]
+    return []
+
+
+def _is_json_content_type(value: str) -> bool:
+    """Validate the complete media type and its parameters, not only its prefix."""
+    if type(value) is not str or not value:
+        return False
+    # MIME field values are ASCII. HTAB is permitted as optional whitespace;
+    # all other controls, DEL, non-ASCII, and obs-fold remnants are rejected.
+    if any((ord(ch) < 0x20 and ch != "\t") or ord(ch) > 0x7e for ch in value):
+        return False
+    parts = value.split(";")
+    media_type = parts[0].strip(" \t").lower()
+    if media_type != "application/json" and not _JSON_MEDIA_TYPE.fullmatch(media_type):
+        return False
+    seen_parameters: set[str] = set()
+    for part in parts[1:]:
+        if "=" not in part:
+            return False
+        name, parameter_value = part.split("=", 1)
+        name = name.strip(" \t").lower()
+        parameter_value = parameter_value.strip(" \t")
+        if not _CONTENT_TYPE_TOKEN.fullmatch(name) or name in seen_parameters:
+            return False
+        seen_parameters.add(name)
+        if _CONTENT_TYPE_TOKEN.fullmatch(parameter_value):
+            continue
+        if len(parameter_value) < 2 or parameter_value[0] != '"' or parameter_value[-1] != '"':
+            return False
+        i = 1
+        while i < len(parameter_value) - 1:
+            ch = parameter_value[i]
+            code = ord(ch)
+            if ch == "\\":
+                i += 1
+                if i >= len(parameter_value) - 1:
+                    return False
+                code = ord(parameter_value[i])
+                if code != 0x09 and not 0x20 <= code <= 0x7e:
+                    return False
+            elif ch == '"' or (code < 0x20 and code != 0x09) or code > 0x7e:
+                return False
+            i += 1
+    return True
+
 
 class CycleKernelLinkError(ValueError):
     """Invalid endpoint, transport failure, or invalid CycleKernel response."""
@@ -33,8 +95,37 @@ def _base_url(value: str) -> str:
         raise CycleKernelLinkError("credentials in URLs are forbidden")
     if p.path not in {"", "/"} or p.query or p.fragment:
         raise CycleKernelLinkError("base_url must not include path, query, or fragment")
-    if port is not None and not 1 <= port <= 65535:
-        raise CycleKernelLinkError("base_url port is out of range")
+    if p.netloc.endswith(":"):
+        raise CycleKernelLinkError("base_url must not contain an empty port")
+    if port is not None:
+        raw_port = p.netloc.rsplit(":", 1)[-1]
+        if raw_port != str(port):
+            raise CycleKernelLinkError("base_url port must use canonical decimal notation")
+        if not 1 <= port <= 65535:
+            raise CycleKernelLinkError("base_url port is out of range")
+    host = p.hostname
+    if "%" in host or not host.isascii():
+        raise CycleKernelLinkError("base_url hostname must not use escaped or non-ASCII forms")
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError as exc:
+            raise CycleKernelLinkError("base_url IPv6 host is invalid") from exc
+    else:
+        dns_host = host[:-1] if host.endswith(".") else host
+        numeric_host = re.fullmatch(r"(?:[0-9]+|0[xX][0-9A-Fa-f]+)(?:\.(?:[0-9]+|0[xX][0-9A-Fa-f]+))*", dns_host)
+        if numeric_host:
+            try:
+                ipaddress.IPv4Address(dns_host)
+            except ValueError as exc:
+                raise CycleKernelLinkError("base_url IPv4 host must use four canonical decimal octets") from exc
+        else:
+            if not dns_host or len(dns_host) > 253:
+                raise CycleKernelLinkError("base_url DNS hostname length is invalid")
+            labels = dns_host.split(".")
+            if any(not label or len(label) > 63 or label[0] == "-" or label[-1] == "-"
+                   or not re.fullmatch(r"[A-Za-z0-9-]+", label) for label in labels):
+                raise CycleKernelLinkError("base_url DNS hostname contains an invalid label")
     return urlunsplit((p.scheme, p.netloc, "", "", ""))
 
 def _timeout(value: float) -> float:
@@ -141,17 +232,36 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
     req = Request(root + path, headers={"Accept":"application/json","User-Agent":"AVRONE-CycleKernel-Link/1"})
     started = time.monotonic()
     try:
-        response = (opener or build_opener(_RejectRedirects()).open)(req, timeout=timeout)
+        transport = opener if opener is not None else build_opener(_RejectRedirects()).open
+        response = transport(req, timeout=timeout)
         try:
             status = getattr(response, "status", None); headers = getattr(response, "headers", {})
-            ctype = headers.get("Content-Type", "") if hasattr(headers,"get") else ""
+            content_types = _header_values(headers, "Content-Type")
+            content_lengths = _header_values(headers, "Content-Length")
+            transfer_encodings = _header_values(headers, "Transfer-Encoding")
+            ctype = content_types[0] if len(content_types) == 1 else ""
             if type(status) is not int or status != 200:
                 raise CycleKernelLinkError("CycleKernel returned a non-200 HTTP status")
             if type(ctype) is not str or not ctype.strip():
                 raise CycleKernelLinkError("CycleKernel response is missing a JSON content type")
-            media_type = ctype.split(";", 1)[0].strip().lower()
-            if media_type != "application/json" and not _JSON_MEDIA_TYPE.fullmatch(media_type):
-                raise CycleKernelLinkError("CycleKernel response content type is not JSON")
+            if not _is_json_content_type(ctype):
+                raise CycleKernelLinkError("CycleKernel response content type is not valid JSON MIME syntax")
+            if len(content_lengths) > 1 or len(transfer_encodings) > 1:
+                raise CycleKernelLinkError("CycleKernel response has duplicate framing headers")
+            if content_lengths and transfer_encodings:
+                raise CycleKernelLinkError("CycleKernel response cannot combine transfer-encoding and content-length")
+            if content_lengths:
+                declared_length = content_lengths[0]
+                if type(declared_length) is not str or not re.fullmatch(r"[0-9]+", declared_length):
+                    raise CycleKernelLinkError("CycleKernel response has an invalid content length")
+                normalized_length = declared_length.lstrip("0") or "0"
+                max_length = str(MAX_RESPONSE_BYTES)
+                if len(normalized_length) > len(max_length) or (len(normalized_length) == len(max_length) and normalized_length > max_length):
+                    raise CycleKernelLinkError("CycleKernel response exceeds the 1 MiB limit")
+            if transfer_encodings:
+                encoding = transfer_encodings[0]
+                if type(encoding) is not str or encoding.strip().lower() != "chunked":
+                    raise CycleKernelLinkError("CycleKernel response has an unsupported transfer encoding")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         finally:
             close = getattr(response, "close", None)
@@ -164,8 +274,8 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
         raise CycleKernelLinkError("CycleKernel returned an HTTP error") from None
     except Exception as exc:
         # Third-party openers and response objects are an untrusted transport boundary.
-        # Preserve only the exception class; never leak headers, URLs, or secret text.
-        raise CycleKernelLinkError(f"CycleKernel transport failed: {type(exc).__name__}") from None
+        # Do not expose exception names or text from an untrusted transport.
+        raise CycleKernelLinkError("CycleKernel transport failed") from None
     data = validate_observation(path, _decode(raw))
     return {"schema":"avrone.cyclekernel.observation/v1","source":"cyclekernel","path":path,
             "observed_at_unix":time.time(),"elapsed_ms":round((time.monotonic()-started)*1000,3),
