@@ -119,8 +119,24 @@ class LinkTests(unittest.TestCase):
 
     def test_transport_errors_are_sanitized(self):
         def broken(*args,**kwargs): raise TimeoutError("secret details should not leak")
-        with self.assertRaisesRegex(CycleKernelLinkError,"TimeoutError"):
+        with self.assertRaisesRegex(CycleKernelLinkError,"TimeoutError") as caught:
             fetch_observation("http://localhost:5000","/health",opener=broken)
+        self.assertNotIn("secret details", str(caught.exception))
+
+    def test_unexpected_transport_and_read_failures_are_sanitized(self):
+        def broken(*args, **kwargs):
+            raise RuntimeError("authorization=top-secret")
+        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+            fetch_observation("http://localhost:5000", "/health", opener=broken)
+        self.assertNotIn("top-secret", str(caught.exception))
+
+        class BrokenRead(Response):
+            def read(self, n=-1):
+                raise RuntimeError("body-token=secret")
+        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+            fetch_observation("http://localhost:5000", "/health",
+                              opener=lambda *a, **k: BrokenRead(b""))
+        self.assertNotIn("body-token", str(caught.exception))
 
     def test_redirects_are_not_followed(self):
         from urllib.error import HTTPError
