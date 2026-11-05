@@ -57,12 +57,19 @@ def _reject_json_constant(value: str) -> None:
     raise CycleKernelLinkError("response contains a non-finite JSON number")
 
 
+def _finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise CycleKernelLinkError("response contains a non-finite JSON number")
+    return parsed
+
+
 def _decode(raw: bytes) -> Any:
     if not isinstance(raw, bytes) or len(raw) > MAX_RESPONSE_BYTES:
         raise CycleKernelLinkError("response exceeds the 1 MiB limit or is not bytes")
     try:
         return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object,
-                          parse_constant=_reject_json_constant)
+                          parse_constant=_reject_json_constant, parse_float=_finite_float)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise CycleKernelLinkError("response is not valid UTF-8 JSON") from exc
 
