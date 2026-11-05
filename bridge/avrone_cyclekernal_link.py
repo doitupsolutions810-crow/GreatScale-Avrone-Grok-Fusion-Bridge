@@ -133,12 +133,13 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
             status = getattr(response, "status", 200); headers = getattr(response, "headers", {})
             ctype = headers.get("Content-Type", "") if hasattr(headers,"get") else ""
             if status != 200: raise CycleKernelLinkError(f"CycleKernel returned HTTP {status}")
-            if ctype:
-                media_type = ctype.split(";", 1)[0].strip().lower()
-                if media_type != "application/json" and not (
-                    media_type.startswith("application/") and media_type.endswith("+json")
-                ):
-                    raise CycleKernelLinkError("CycleKernel response content type is not JSON")
+            if not isinstance(ctype, str) or not ctype.strip():
+                raise CycleKernelLinkError("CycleKernel response is missing a JSON content type")
+            media_type = ctype.split(";", 1)[0].strip().lower()
+            if media_type != "application/json" and not (
+                media_type.startswith("application/") and media_type.endswith("+json")
+            ):
+                raise CycleKernelLinkError("CycleKernel response content type is not JSON")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         finally:
             close = getattr(response, "close", None)
