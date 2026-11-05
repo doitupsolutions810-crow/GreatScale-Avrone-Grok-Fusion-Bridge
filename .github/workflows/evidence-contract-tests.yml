@@ -5,6 +5,8 @@ on:
     paths:
       - "bridge/greatscale_evidence.py"
       - "bridge/test_greatscale_evidence.py"
+      - "bridge/avrone_cyclekernal_link.py"
+      - "bridge/test_avrone_cyclekernel_link.py"
       - ".github/workflows/evidence-contract-tests.yml"
   push:
     branches:
@@ -28,7 +30,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Compile adapter and tests
         working-directory: bridge
-        run: python -m compileall -q greatscale_evidence.py test_greatscale_evidence.py
+        run: python -m compileall -q greatscale_evidence.py test_greatscale_evidence.py avrone_cyclekernal_link.py test_avrone_cyclekernel_link.py
       - name: Run adversarial unit tests
         working-directory: bridge
-        run: python -m unittest -v test_greatscale_evidence
+        run: python -m unittest -v test_greatscale_evidence test_avrone_cyclekernel_link
