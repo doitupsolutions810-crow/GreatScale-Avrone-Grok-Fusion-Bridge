@@ -1,6 +1,6 @@
 """Read-only CycleKernel adapter. No mutation endpoints; bounded HTTP and payload size."""
 from __future__ import annotations
-import hashlib, json, math, time
+import hashlib, json, math, time, unicodedata
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -16,6 +16,12 @@ class CycleKernelLinkError(ValueError):
 def _base_url(value: str) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise CycleKernelLinkError("base_url must be a canonical URL")
+    # urllib.parse strips some embedded ASCII controls before parsing. Reject them
+    # (and other formatting/whitespace characters) before normalization so a
+    # malformed configured URL cannot silently become a different authority.
+    if any(ch.isspace() or ch == "\\" or unicodedata.category(ch) in {"Cc", "Cf", "Cs"}
+           for ch in value):
+        raise CycleKernelLinkError("base_url contains whitespace, controls, formatting, or backslashes")
     try:
         p = urlsplit(value); port = p.port
     except ValueError as exc:
