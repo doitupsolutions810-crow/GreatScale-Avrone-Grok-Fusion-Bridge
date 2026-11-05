@@ -82,7 +82,7 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Text(b"{}"))
 
     def test_malformed_json_and_oversized_payload_fail_closed(self):
-        for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b"x"*(MAX_RESPONSE_BYTES+1)]:
+        for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b'{"mood_dot":1e999}', b'{"promoted":'+b'9'*5000+b'}', b"x"*(MAX_RESPONSE_BYTES+1)]:
             with self.subTest(length=len(raw)), self.assertRaises(CycleKernelLinkError):
                 fetch_observation("http://localhost:5000","/health",opener=lambda *a,raw=raw,**k:Response(raw))
 
@@ -112,6 +112,10 @@ class LinkTests(unittest.TestCase):
                     {**state(),"universes":{"U1":{**state()["universes"]["U1"],"cycle_count":True}}}]:
             with self.subTest(bad=bad), self.assertRaises(CycleKernelLinkError):
                 validate_observation("/state",bad)
+
+    def test_non_callable_transport_override_is_rejected(self):
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health", opener=object())
 
     def test_transport_errors_are_sanitized(self):
         def broken(*args,**kwargs): raise TimeoutError("secret details should not leak")
