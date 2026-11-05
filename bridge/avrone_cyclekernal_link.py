@@ -133,7 +133,12 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
             status = getattr(response, "status", 200); headers = getattr(response, "headers", {})
             ctype = headers.get("Content-Type", "") if hasattr(headers,"get") else ""
             if status != 200: raise CycleKernelLinkError(f"CycleKernel returned HTTP {status}")
-            if ctype and "application/json" not in ctype.lower(): raise CycleKernelLinkError("CycleKernel response content type is not JSON")
+            if ctype:
+                media_type = ctype.split(";", 1)[0].strip().lower()
+                if media_type != "application/json" and not (
+                    media_type.startswith("application/") and media_type.endswith("+json")
+                ):
+                    raise CycleKernelLinkError("CycleKernel response content type is not JSON")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         finally:
             close = getattr(response, "close", None)
@@ -141,11 +146,11 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
     except CycleKernelLinkError:
         raise
     except HTTPError as exc:
-        raise CycleKernelLinkError(f"CycleKernel returned HTTP {exc.code}") from exc
+        raise CycleKernelLinkError(f"CycleKernel returned HTTP {exc.code}") from None
     except Exception as exc:
         # Third-party openers and response objects are an untrusted transport boundary.
         # Preserve only the exception class; never leak headers, URLs, or secret text.
-        raise CycleKernelLinkError(f"CycleKernel transport failed: {type(exc).__name__}") from exc
+        raise CycleKernelLinkError(f"CycleKernel transport failed: {type(exc).__name__}") from None
     data = validate_observation(path, _decode(raw))
     return {"schema":"avrone.cyclekernel.observation/v1","source":"cyclekernel","path":path,
             "observed_at_unix":time.time(),"elapsed_ms":round((time.monotonic()-started)*1000,3),
