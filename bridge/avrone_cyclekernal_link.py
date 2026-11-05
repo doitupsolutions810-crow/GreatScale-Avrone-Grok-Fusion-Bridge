@@ -138,8 +138,14 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
         finally:
             close = getattr(response, "close", None)
             if callable(close): close()
-    except HTTPError as exc: raise CycleKernelLinkError(f"CycleKernel returned HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, OSError) as exc: raise CycleKernelLinkError(f"CycleKernel transport failed: {type(exc).__name__}") from exc
+    except CycleKernelLinkError:
+        raise
+    except HTTPError as exc:
+        raise CycleKernelLinkError(f"CycleKernel returned HTTP {exc.code}") from exc
+    except Exception as exc:
+        # Third-party openers and response objects are an untrusted transport boundary.
+        # Preserve only the exception class; never leak headers, URLs, or secret text.
+        raise CycleKernelLinkError(f"CycleKernel transport failed: {type(exc).__name__}") from exc
     data = validate_observation(path, _decode(raw))
     return {"schema":"avrone.cyclekernel.observation/v1","source":"cyclekernel","path":path,
             "observed_at_unix":time.time(),"elapsed_ms":round((time.monotonic()-started)*1000,3),
