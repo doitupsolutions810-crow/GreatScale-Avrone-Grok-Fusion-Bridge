@@ -44,10 +44,25 @@ def _timeout(value: float) -> float:
         raise CycleKernelLinkError("timeout must be finite and between 0.05 and 30 seconds")
     return result
 
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CycleKernelLinkError("response contains a duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise CycleKernelLinkError("response contains a non-finite JSON number")
+
+
 def _decode(raw: bytes) -> Any:
     if not isinstance(raw, bytes) or len(raw) > MAX_RESPONSE_BYTES:
         raise CycleKernelLinkError("response exceeds the 1 MiB limit or is not bytes")
-    try: return json.loads(raw.decode("utf-8"))
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object,
+                          parse_constant=_reject_json_constant)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise CycleKernelLinkError("response is not valid UTF-8 JSON") from exc
 
