@@ -110,6 +110,13 @@ class LinkTests(unittest.TestCase):
         with self.assertRaisesRegex(CycleKernelLinkError,"TimeoutError"):
             fetch_observation("http://localhost:5000","/health",opener=broken)
 
+    def test_redirects_are_not_followed(self):
+        from urllib.error import HTTPError
+        def redirect(*args, **kwargs):
+            raise HTTPError("http://localhost:5000/health", 302, "redirect", {}, None)
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health", opener=redirect)
+
 
 if __name__ == "__main__":
     unittest.main()
