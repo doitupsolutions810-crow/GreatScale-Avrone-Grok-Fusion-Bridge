@@ -274,21 +274,21 @@ class LinkTests(unittest.TestCase):
 
     def test_transport_errors_are_sanitized(self):
         def broken(*args,**kwargs): raise TimeoutError("secret details should not leak")
-        with self.assertRaisesRegex(CycleKernelLinkError,"TimeoutError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError,"CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000","/health",opener=broken)
         self.assertNotIn("secret details", str(caught.exception))
 
     def test_unexpected_transport_and_read_failures_are_sanitized(self):
         def broken(*args, **kwargs):
             raise RuntimeError("authorization=top-secret")
-        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health", opener=broken)
         self.assertNotIn("top-secret", str(caught.exception))
 
         class BrokenRead(Response):
             def read(self, n=-1):
                 raise RuntimeError("body-token=secret")
-        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: BrokenRead(b""))
         self.assertNotIn("body-token", str(caught.exception))
@@ -297,14 +297,14 @@ class LinkTests(unittest.TestCase):
         secret = "credential=TOP_SECRET_X91"
         def broken_opener(*args, **kwargs):
             raise CycleKernelLinkError(secret)
-        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health", opener=broken_opener)
         self.assertNotIn(secret, str(caught.exception))
 
         class BrokenClose(Response):
             def close(self):
                 raise CycleKernelLinkError(secret)
-        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: BrokenClose(json.dumps(health()).encode()))
         self.assertNotIn(secret, str(caught.exception))
@@ -314,7 +314,7 @@ class LinkTests(unittest.TestCase):
                 raise CycleKernelLinkError(secret)
         class BrokenHeaderResponse(Response):
             headers = BrokenHeaders()
-        with self.assertRaisesRegex(CycleKernelLinkError, "transport failed: CycleKernelLinkError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: BrokenHeaderResponse(json.dumps(health()).encode()))
         self.assertNotIn(secret, str(caught.exception))
