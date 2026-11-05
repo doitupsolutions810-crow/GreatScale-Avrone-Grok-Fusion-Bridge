@@ -206,6 +206,22 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: RepeatedResponse(json.dumps(health()).encode()))
 
+    def test_case_insensitive_duplicate_dictionary_headers_fail_closed(self):
+        raw = json.dumps(health()).encode()
+        cases = [
+            {"Content-Type": "application/json", "content-type": "text/plain"},
+            {"Content-Type": "application/json", "Content-Length": str(len(raw)),
+             "content-length": str(len(raw) + 1)},
+        ]
+        for headers in cases:
+            class CaseVariantResponse(Response):
+                pass
+            response = CaseVariantResponse(raw)
+            response.headers = headers
+            with self.subTest(headers=headers), self.assertRaises(CycleKernelLinkError):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: response)
+
     def test_content_type_parameters_are_fully_validated(self):
         valid = [
             "application/json", "APPLICATION/JSON", " application/json ",
@@ -281,6 +297,19 @@ class LinkTests(unittest.TestCase):
         with self.assertRaises(CycleKernelLinkError):
             fetch_observation("http://localhost:5000", "/health", opener=lambda *a, **k: wrong)
         self.assertTrue(wrong.closed)
+
+    def test_transport_response_requires_callable_close(self):
+        class MissingClose:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            def read(self, n=-1): return json.dumps(health()).encode()[:n]
+        class NonCallableClose(MissingClose):
+            close = None
+        for response in (MissingClose(), NonCallableClose()):
+            with self.subTest(response=type(response).__name__), self.assertRaisesRegex(
+                    CycleKernelLinkError, "CycleKernel transport failed"):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: response)
 
     def test_falsey_callable_transport_is_not_discarded(self):
         calls = []
