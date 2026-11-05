@@ -171,14 +171,14 @@ class LinkTests(unittest.TestCase):
 
     def test_transport_errors_are_sanitized(self):
         def broken(*args,**kwargs): raise TimeoutError("secret details should not leak")
-        with self.assertRaisesRegex(CycleKernelLinkError,"TimeoutError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError,"CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000","/health",opener=broken)
         self.assertNotIn("secret details", str(caught.exception))
 
     def test_unexpected_transport_and_read_failures_are_sanitized(self):
         def broken(*args, **kwargs):
             raise RuntimeError("authorization=top-secret")
-        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health", opener=broken)
         self.assertNotIn("top-secret", str(caught.exception))
 
