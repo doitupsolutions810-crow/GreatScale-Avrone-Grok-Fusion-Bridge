@@ -79,7 +79,7 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Text(b"{}"))
 
     def test_malformed_json_and_oversized_payload_fail_closed(self):
-        for raw in [b"{", b"\xff", b"null", b"[]" , b"x"*(MAX_RESPONSE_BYTES+1)]:
+        for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b"x"*(MAX_RESPONSE_BYTES+1)]:
             with self.subTest(length=len(raw)), self.assertRaises(CycleKernelLinkError):
                 fetch_observation("http://localhost:5000","/health",opener=lambda *a,raw=raw,**k:Response(raw))
 
