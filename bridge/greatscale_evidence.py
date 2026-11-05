@@ -40,7 +40,7 @@ def evidence_snapshot(failures: int, runs: int) -> dict[str,Any]:
         raise EvidenceContractError("failures and runs must be integers")
     if not 1<=runs<=MAX_RUNS or not 0<=failures<=runs: raise EvidenceContractError("need 1<=runs<=1e9 and 0<=failures<=runs")
     p=failures/runs; s=p*(1-p); phi=(1+math.sqrt(5))/2; n=8-4*s
-    n95=None if p==0 else (1 if p==1 else max(1,math.ceil(math.log(.05)/math.log1p(-p)-1e-12)))
+    n95=None if p==0 else (1 if p==1 else max(1,math.ceil(math.log(.05)/math.log(1-p)-1e-12)))
     return {"failures":failures,"runs":runs,"p":p,"S":s,"variance":s,"logCoord":4*s,"psi":CONE+s,"cone":CONE,
             "coneOk":CONE+s>=CONE-1e-12,"onConeFloor":s==0.0,
             "orientation":"pass" if failures==0 else ("fail" if failures==runs else "mixed"),
