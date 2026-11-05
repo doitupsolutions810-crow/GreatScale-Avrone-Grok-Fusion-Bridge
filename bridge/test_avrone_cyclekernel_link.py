@@ -91,7 +91,7 @@ class LinkTests(unittest.TestCase):
                 validate_observation("/health",bad)
 
     def test_colony_consistency_and_nonfinite_values(self):
-        for bad in [{**colony(),"active":True},{**colony(),"promoted":4},
+        for bad in [{**colony(),"active":True},{**colony(),"promoted":4},{**colony(),"mood_dot":10**10000},
                     {**colony(),"held":3},{**colony(),"mood_dot":float("nan")},
                     {**colony(),"mood_dot":float("inf")},{**colony(),"mood_dot":1.1}]:
             with self.subTest(bad=bad), self.assertRaises(CycleKernelLinkError):
