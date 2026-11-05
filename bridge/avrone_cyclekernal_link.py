@@ -70,7 +70,7 @@ def _decode(raw: bytes) -> Any:
     try:
         return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object,
                           parse_constant=_reject_json_constant, parse_float=_finite_float)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise CycleKernelLinkError("response is not valid UTF-8 JSON") from exc
 
 def validate_observation(path: str, data: Any) -> dict[str, Any]:
@@ -121,6 +121,8 @@ class _RejectRedirects(HTTPRedirectHandler):
 
 def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, opener: Callable[...,Any] | None = None) -> dict[str,Any]:
     root = _base_url(base_url); timeout = _timeout(timeout)
+    if opener is not None and not callable(opener):
+        raise CycleKernelLinkError("opener must be callable")
     if not isinstance(path, str) or path not in _ALLOWED_PATHS:
         raise CycleKernelLinkError("only documented read-only GET endpoints are allowed")
     req = Request(root + path, headers={"Accept":"application/json","User-Agent":"AVRONE-CycleKernel-Link/1"})
