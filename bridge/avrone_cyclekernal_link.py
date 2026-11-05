@@ -1,6 +1,6 @@
 """Read-only CycleKernel adapter. No mutation endpoints; bounded HTTP and payload size."""
 from __future__ import annotations
-import hashlib, json, math, time, unicodedata
+import hashlib, json, math, re, time, unicodedata
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -9,6 +9,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_RESPONSE_BYTES = 1_048_576
 DEFAULT_TIMEOUT_SECONDS = 3.0
 _ALLOWED_PATHS = {"/health", "/state", "/colony"}
+_JSON_MEDIA_TYPE = re.compile(r"^application/[!#$%&'*.^_`|~0-9A-Za-z-][!#$%&'*+.^_`|~0-9A-Za-z-]*\+json$")
 
 class CycleKernelLinkError(ValueError):
     """Invalid endpoint, transport failure, or invalid CycleKernel response."""
@@ -142,9 +143,7 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
             if not isinstance(ctype, str) or not ctype.strip():
                 raise CycleKernelLinkError("CycleKernel response is missing a JSON content type")
             media_type = ctype.split(";", 1)[0].strip().lower()
-            if media_type != "application/json" and not (
-                media_type.startswith("application/") and media_type.endswith("+json")
-            ):
+            if media_type != "application/json" and not _JSON_MEDIA_TYPE.fullmatch(media_type):
                 raise CycleKernelLinkError("CycleKernel response content type is not JSON")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         finally:
