@@ -4,7 +4,7 @@ import hashlib, json, math, time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_RESPONSE_BYTES = 1_048_576
 DEFAULT_TIMEOUT_SECONDS = 3.0
@@ -83,13 +83,18 @@ def observation_digest(path: str, data: Any) -> str:
     except (TypeError, ValueError, RecursionError) as exc: raise CycleKernelLinkError("response cannot be canonicalized") from exc
     return hashlib.sha256(raw).hexdigest()
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise CycleKernelLinkError(f"CycleKernel redirect rejected (HTTP {code})")
+
+
 def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, opener: Callable[...,Any] | None = None) -> dict[str,Any]:
     root = _base_url(base_url); timeout = _timeout(timeout)
     if path not in _ALLOWED_PATHS: raise CycleKernelLinkError("only documented read-only GET endpoints are allowed")
     req = Request(root + path, headers={"Accept":"application/json","User-Agent":"AVRONE-CycleKernel-Link/1"})
     started = time.monotonic()
     try:
-        response = (opener or urlopen)(req, timeout=timeout)
+        response = (opener or build_opener(_RejectRedirects()).open)(req, timeout=timeout)
         try:
             status = getattr(response, "status", 200); headers = getattr(response, "headers", {})
             ctype = headers.get("Content-Type", "") if hasattr(headers,"get") else ""
