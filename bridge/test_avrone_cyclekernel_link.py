@@ -56,6 +56,7 @@ class LinkTests(unittest.TestCase):
             "http://2130706433", "http://0x7f000001", "http://example..com",
             "http://-bad.example", "http://bad-.example", "http://foo_bar.example",
             "http://.example", "http://example.com:00080",
+            "http://127.0.0.1.", "http://1.2.3.4.", "http://[v1.foo]",
         ]
         for url in invalid:
             with self.subTest(url=url), self.assertRaises(CycleKernelLinkError):
