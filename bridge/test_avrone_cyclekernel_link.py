@@ -77,12 +77,14 @@ class LinkTests(unittest.TestCase):
         with self.assertRaises(CycleKernelLinkError):
             fetch_observation("http://localhost:5000","/health",opener=lambda *a,**k:Bad(b"{}"))
         for media_type in ("text/plain", "application/jsonp", "application/xml",
-                           "application/octet-stream"):
+                           "application/octet-stream", "application/+json",
+                           "application/++json", "application/foo bar+json"):
             class WrongType(Response):
                 headers={"Content-Type":media_type}
             with self.subTest(content_type=media_type), self.assertRaises(CycleKernelLinkError):
+                # Valid body ensures rejection is caused by the media type itself.
                 fetch_observation("http://localhost:5000","/health",
-                                  opener=lambda *a,**k:WrongType(b"{}"))
+                                  opener=lambda *a,**k:WrongType(json.dumps(health()).encode()))
         class ParameterizedJSON(Response):
             headers={"Content-Type":"Application/JSON; charset=utf-8"}
         result=fetch_observation("http://localhost:5000","/health",
