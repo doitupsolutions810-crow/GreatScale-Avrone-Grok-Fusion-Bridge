@@ -1,0 +1,34 @@
+name: Evidence Contract Tests
+
+on:
+  pull_request:
+    paths:
+      - "bridge/greatscale_evidence.py"
+      - "bridge/test_greatscale_evidence.py"
+      - ".github/workflows/evidence-contract-tests.yml"
+  push:
+    branches:
+      - "integration/greatscale-evidence-contract-2026-11-05"
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile adapter and tests
+        working-directory: bridge
+        run: python -m compileall -q greatscale_evidence.py test_greatscale_evidence.py
+      - name: Run adversarial unit tests
+        working-directory: bridge
+        run: python -m unittest -v test_greatscale_evidence
