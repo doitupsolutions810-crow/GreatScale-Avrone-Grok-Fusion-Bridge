@@ -147,6 +147,10 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
     except CycleKernelLinkError:
         raise
     except HTTPError as exc:
+        try:
+            exc.close()
+        except Exception:
+            pass
         raise CycleKernelLinkError(f"CycleKernel returned HTTP {exc.code}") from None
     except Exception as exc:
         # Third-party openers and response objects are an untrusted transport boundary.
