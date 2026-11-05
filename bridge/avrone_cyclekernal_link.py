@@ -9,7 +9,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_RESPONSE_BYTES = 1_048_576
 DEFAULT_TIMEOUT_SECONDS = 3.0
 _ALLOWED_PATHS = {"/health", "/state", "/colony"}
-_JSON_MEDIA_TYPE = re.compile(r"^application/[!#$%&'*.^_`|~0-9A-Za-z-][!#$%&'*+.^_`|~0-9A-Za-z-]*\+json$")
+_JSON_MEDIA_TYPE = re.compile(r"^application/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\+json$")
 
 class CycleKernelLinkError(ValueError):
     """Invalid endpoint, transport failure, or invalid CycleKernel response."""
