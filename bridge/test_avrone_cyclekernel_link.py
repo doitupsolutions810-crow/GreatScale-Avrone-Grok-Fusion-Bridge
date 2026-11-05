@@ -124,6 +124,32 @@ class LinkTests(unittest.TestCase):
             fetch_observation("http://localhost:5000","/health",
                               opener=lambda *a,**k:MissingType(b"{}"))
 
+    def test_content_length_must_match_received_body(self):
+        from email.message import Message
+        raw = json.dumps(health()).encode()
+        for declared in (len(raw) + 1, len(raw) + 1024):
+            headers = Message()
+            headers.add_header("Content-Type", "application/json")
+            headers.add_header("Content-Length", str(declared))
+            class MismatchedResponse(Response):
+                pass
+            response = MismatchedResponse(raw)
+            response.headers = headers
+            with self.subTest(declared=declared), self.assertRaisesRegex(
+                    CycleKernelLinkError, "CycleKernel transport failed"):
+                fetch_observation("http://localhost:5000", "/health",
+                                  opener=lambda *a, **k: response)
+
+        headers = Message()
+        headers.add_header("Content-Type", "application/json")
+        headers.add_header("Content-Length", str(len(raw)))
+        class ExactResponse(Response):
+            pass
+        response = ExactResponse(raw)
+        response.headers = headers
+        self.assertEqual(fetch_observation("http://localhost:5000", "/health",
+                                           opener=lambda *a, **k: response)["data"], health())
+
     def test_ambiguous_http_framing_headers_fail_closed(self):
         from email.message import Message
         raw = json.dumps(health()).encode()
