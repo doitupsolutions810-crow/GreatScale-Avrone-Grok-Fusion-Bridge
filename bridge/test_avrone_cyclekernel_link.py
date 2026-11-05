@@ -88,6 +88,16 @@ class LinkTests(unittest.TestCase):
         result=fetch_observation("http://localhost:5000","/health",
                                  opener=lambda *a,**k:ParameterizedJSON(json.dumps(health()).encode()))
         self.assertEqual(result["data"],health())
+        class VendorJSON(Response):
+            headers={"Content-Type":"application/vnd.avrone.observation+json"}
+        result=fetch_observation("http://localhost:5000","/health",
+                                 opener=lambda *a,**k:VendorJSON(json.dumps(health()).encode()))
+        self.assertEqual(result["data"],health())
+        class MissingType(Response):
+            headers={}
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000","/health",
+                              opener=lambda *a,**k:MissingType(b"{}"))
 
     def test_malformed_json_and_oversized_payload_fail_closed(self):
         for raw in [b"{", b"\xff", b"null", b"[]" , b'{"status":"healthy","status":"healthy"}', b'{"mood_dot":NaN}', b'{"mood_dot":1e999}', b'{"promoted":'+b'9'*5000+b'}', b"x"*(MAX_RESPONSE_BYTES+1)]:
@@ -120,6 +130,23 @@ class LinkTests(unittest.TestCase):
                     {**state(),"universes":{"U1":{**state()["universes"]["U1"],"cycle_count":True}}}]:
             with self.subTest(bad=bad), self.assertRaises(CycleKernelLinkError):
                 validate_observation("/state",bad)
+
+    def test_response_is_closed_after_success_and_rejection(self):
+        class Tracked(Response):
+            def __init__(self, raw):
+                super().__init__(raw)
+                self.closed = False
+            def close(self):
+                self.closed = True
+        ok = Tracked(json.dumps(health()).encode())
+        fetch_observation("http://localhost:5000", "/health", opener=lambda *a, **k: ok)
+        self.assertTrue(ok.closed)
+        class Wrong(Tracked):
+            headers={"Content-Type":"text/plain"}
+        wrong = Wrong(b"{}")
+        with self.assertRaises(CycleKernelLinkError):
+            fetch_observation("http://localhost:5000", "/health", opener=lambda *a, **k: wrong)
+        self.assertTrue(wrong.closed)
 
     def test_non_callable_transport_override_is_rejected(self):
         with self.assertRaises(CycleKernelLinkError):
