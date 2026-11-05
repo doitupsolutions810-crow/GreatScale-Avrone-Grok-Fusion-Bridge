@@ -31,9 +31,18 @@ def _base_url(value: str) -> str:
     return urlunsplit((p.scheme, p.netloc, "", "", ""))
 
 def _timeout(value: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not .05 <= value <= 30:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CycleKernelLinkError("timeout must be finite and between 0.05 and 30 seconds")
-    return float(value)
+    # Compare bounds before float conversion: math.isfinite(10**10000) can overflow.
+    try:
+        if value < .05 or value > 30:
+            raise CycleKernelLinkError("timeout must be finite and between 0.05 and 30 seconds")
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise CycleKernelLinkError("timeout must be finite and between 0.05 and 30 seconds") from exc
+    if not math.isfinite(result):
+        raise CycleKernelLinkError("timeout must be finite and between 0.05 and 30 seconds")
+    return result
 
 def _decode(raw: bytes) -> Any:
     if not isinstance(raw, bytes) or len(raw) > MAX_RESPONSE_BYTES:
@@ -90,7 +99,8 @@ class _RejectRedirects(HTTPRedirectHandler):
 
 def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, opener: Callable[...,Any] | None = None) -> dict[str,Any]:
     root = _base_url(base_url); timeout = _timeout(timeout)
-    if path not in _ALLOWED_PATHS: raise CycleKernelLinkError("only documented read-only GET endpoints are allowed")
+    if not isinstance(path, str) or path not in _ALLOWED_PATHS:
+        raise CycleKernelLinkError("only documented read-only GET endpoints are allowed")
     req = Request(root + path, headers={"Accept":"application/json","User-Agent":"AVRONE-CycleKernel-Link/1"})
     started = time.monotonic()
     try:
