@@ -58,7 +58,7 @@ def validate_observation(path: str, data: Any) -> dict[str, Any]:
             raise CycleKernelLinkError("colony counts are inconsistent")
         if not isinstance(data.get("genome_id"), (str, type(None))): raise CycleKernelLinkError("colony genome_id has invalid type")
         m = data.get("mood_dot")
-        if isinstance(m, bool) or not isinstance(m, (int,float)) or not math.isfinite(m) or not 0 <= m <= 1:
+        if isinstance(m, bool) or not isinstance(m, (int,float)) or not 0 <= m <= 1 or not math.isfinite(m):
             raise CycleKernelLinkError("colony mood_dot must be finite and in [0,1]")
     elif path == "/state":
         if not isinstance(data, dict) or not isinstance(data.get("universes"), dict): raise CycleKernelLinkError("state universes must be an object")
