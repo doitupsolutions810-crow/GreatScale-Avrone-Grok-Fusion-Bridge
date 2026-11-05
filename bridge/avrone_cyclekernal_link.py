@@ -253,6 +253,7 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
                 raise CycleKernelLinkError("CycleKernel response content type is not valid JSON MIME syntax")
             if len(content_lengths) > 1 or len(transfer_encodings) > 1:
                 raise CycleKernelLinkError("CycleKernel response has duplicate framing headers")
+            expected_length = None
             if content_lengths and transfer_encodings:
                 raise CycleKernelLinkError("CycleKernel response cannot combine transfer-encoding and content-length")
             if content_lengths:
@@ -263,11 +264,14 @@ def fetch_observation(base_url: str, path: str, *, timeout: float = DEFAULT_TIME
                 max_length = str(MAX_RESPONSE_BYTES)
                 if len(normalized_length) > len(max_length) or (len(normalized_length) == len(max_length) and normalized_length > max_length):
                     raise CycleKernelLinkError("CycleKernel response exceeds the 1 MiB limit")
+                expected_length = int(normalized_length)
             if transfer_encodings:
                 encoding = transfer_encodings[0]
                 if type(encoding) is not str or encoding.strip().lower() != "chunked":
                     raise CycleKernelLinkError("CycleKernel response has an unsupported transfer encoding")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if expected_length is not None and (type(raw) is not bytes or len(raw) != expected_length):
+                raise CycleKernelLinkError("CycleKernel response body does not match Content-Length")
         finally:
             close = getattr(response, "close", None)
             if callable(close): close()
