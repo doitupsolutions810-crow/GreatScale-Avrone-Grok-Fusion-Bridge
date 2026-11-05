@@ -48,12 +48,12 @@ class LinkTests(unittest.TestCase):
                 fetch_observation(url,"/health")
 
     def test_write_or_unknown_routes_rejected_before_network(self):
-        for path in ["/simulate/1","/chat/interact","/admin","/health/"]:
+        for path in ["/simulate/1","/chat/interact","/admin","/health/", None, [], {}]:
             with self.subTest(path=path), self.assertRaises(CycleKernelLinkError):
                 fetch_observation("http://localhost:5000",path)
 
     def test_timeout_validation(self):
-        for timeout in [0, -1, 31, float("nan"), float("inf"), True, "3"]:
+        for timeout in [0, -1, 31, float("nan"), float("inf"), True, "3", 10**10000]:
             with self.subTest(timeout=timeout), self.assertRaises(CycleKernelLinkError):
                 fetch_observation("http://localhost:5000","/health",timeout=timeout)
 
