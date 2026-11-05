@@ -53,8 +53,11 @@ class LinkTests(unittest.TestCase):
                 fetch_observation("http://localhost:5000",path)
 
     def test_timeout_validation(self):
-        for timeout in [0, -1, 31, float("nan"), float("inf"), True, "3", 10**10000]:
-            with self.subTest(timeout=timeout), self.assertRaises(CycleKernelLinkError):
+        cases = [("zero", 0), ("negative", -1), ("over-limit", 31),
+                 ("nan", float("nan")), ("infinity", float("inf")),
+                 ("boolean", True), ("string", "3"), ("huge-integer", 10**10000)]
+        for label, timeout in cases:
+            with self.subTest(case=label), self.assertRaises(CycleKernelLinkError):
                 fetch_observation("http://localhost:5000","/health",timeout=timeout)
 
     def test_successful_fetch_and_headers(self):
@@ -91,10 +94,15 @@ class LinkTests(unittest.TestCase):
                 validate_observation("/health",bad)
 
     def test_colony_consistency_and_nonfinite_values(self):
-        for bad in [{**colony(),"active":True},{**colony(),"promoted":4},{**colony(),"mood_dot":10**10000},
-                    {**colony(),"held":3},{**colony(),"mood_dot":float("nan")},
-                    {**colony(),"mood_dot":float("inf")},{**colony(),"mood_dot":1.1}]:
-            with self.subTest(bad=bad), self.assertRaises(CycleKernelLinkError):
+        cases = [("boolean-count", {**colony(),"active":True}),
+                 ("promoted-exceeds-active", {**colony(),"promoted":4}),
+                 ("huge-mood-integer", {**colony(),"mood_dot":10**10000}),
+                 ("held-exceeds-active", {**colony(),"held":3}),
+                 ("nan", {**colony(),"mood_dot":float("nan")}),
+                 ("infinity", {**colony(),"mood_dot":float("inf")}),
+                 ("above-one", {**colony(),"mood_dot":1.1})]
+        for label, bad in cases:
+            with self.subTest(case=label), self.assertRaises(CycleKernelLinkError):
                 validate_observation("/colony",bad)
 
     def test_state_consistency_and_structure(self):
