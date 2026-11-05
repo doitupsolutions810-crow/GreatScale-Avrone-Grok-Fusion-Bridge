@@ -185,7 +185,7 @@ class LinkTests(unittest.TestCase):
         class BrokenRead(Response):
             def read(self, n=-1):
                 raise RuntimeError("body-token=secret")
-        with self.assertRaisesRegex(CycleKernelLinkError, "RuntimeError") as caught:
+        with self.assertRaisesRegex(CycleKernelLinkError, "CycleKernel transport failed") as caught:
             fetch_observation("http://localhost:5000", "/health",
                               opener=lambda *a, **k: BrokenRead(b""))
         self.assertNotIn("body-token", str(caught.exception))
