@@ -19,8 +19,9 @@ authorize privileged actions or independently verify capability authority.
 `GET /health`, `GET /state`, and `GET /colony` endpoints. It rejects other
 routes, credentials embedded in base URLs, redirects, deceptive or invalid JSON media types, malformed or ambiguous
 JSON, non-finite or exponent-overflow JSON numbers, oversized payloads, invalid response schemas,
-and unbounded timeout values. The transport timeout is capped at 30 seconds
-and the response body at 1 MiB.
+and unbounded timeout values. The transport timeout is capped at 30 seconds,
+the response body at 1 MiB, and the HTTP response must carry an explicit
+`application/json` or `application/*+json` media type.
 
 The base URL must come from trusted deployment configuration, not a request
 parameter or untrusted agent output. This adapter does not itself establish
@@ -33,3 +34,5 @@ Run the focused adapter tests from `bridge/` with:
 
 
 Transport boundary hardening also requires an exact JSON media type (or an application subtype ending in `+json`), rejects deceptive values such as `application/jsonp`, and suppresses chained transport exceptions so secret-bearing exception messages are not retained in the surfaced error context. Tests cover accepted parameterized `application/json` and rejected JSONP/XML/octet-stream content types.
+
+The response handle is closed on success and on validation failure. Transport exception causes are suppressed from the surfaced exception to avoid retaining secret-bearing error text. Tests cover response closure, absent content type, parameterized JSON, vendor `+json`, and deceptive JSONP/XML/octet-stream media types.
