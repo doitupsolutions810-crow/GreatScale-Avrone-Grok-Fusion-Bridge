@@ -104,6 +104,8 @@ def _base_url(value: str) -> str:
         if not 1 <= port <= 65535:
             raise CycleKernelLinkError("base_url port is out of range")
     host = p.hostname
+    if p.netloc.startswith("[") and ":" not in host:
+        raise CycleKernelLinkError("bracketed URL host must be an IPv6 literal")
     if "%" in host or not host.isascii():
         raise CycleKernelLinkError("base_url hostname must not use escaped or non-ASCII forms")
     if ":" in host:
@@ -112,9 +114,12 @@ def _base_url(value: str) -> str:
         except ValueError as exc:
             raise CycleKernelLinkError("base_url IPv6 host is invalid") from exc
     else:
-        dns_host = host[:-1] if host.endswith(".") else host
+        trailing_dot = host.endswith(".")
+        dns_host = host[:-1] if trailing_dot else host
         numeric_host = re.fullmatch(r"(?:[0-9]+|0[xX][0-9A-Fa-f]+)(?:\.(?:[0-9]+|0[xX][0-9A-Fa-f]+))*", dns_host)
         if numeric_host:
+            if trailing_dot:
+                raise CycleKernelLinkError("IPv4 literals must not use a trailing DNS dot")
             try:
                 ipaddress.IPv4Address(dns_host)
             except ValueError as exc:
