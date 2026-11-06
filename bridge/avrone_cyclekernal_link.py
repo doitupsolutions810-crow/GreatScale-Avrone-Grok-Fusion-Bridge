@@ -43,7 +43,28 @@ def _is_json_content_type(value: str) -> bool:
     # all other controls, DEL, non-ASCII, and obs-fold remnants are rejected.
     if any((ord(ch) < 0x20 and ch != "\t") or ord(ch) > 0x7e for ch in value):
         return False
-    parts = value.split(";")
+    # Split parameters only at semicolons outside quoted strings. A semicolon
+    # inside a quoted parameter value is data, not a parameter delimiter.
+    parts: list[str] = []
+    start = 0
+    quoted = False
+    escaped = False
+    for index, ch in enumerate(value):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == "":
+                quoted = False
+        elif ch == "":
+            quoted = True
+        elif ch == ";":
+            parts.append(value[start:index])
+            start = index + 1
+    if quoted or escaped:
+        return False
+    parts.append(value[start:])
     media_type = parts[0].strip(" \t").lower()
     if media_type != "application/json" and not _JSON_MEDIA_TYPE.fullmatch(media_type):
         return False
