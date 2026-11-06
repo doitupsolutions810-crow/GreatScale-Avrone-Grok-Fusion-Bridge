@@ -55,9 +55,9 @@ def _is_json_content_type(value: str) -> bool:
                 escaped = False
             elif ch == "\\":
                 escaped = True
-            elif ch == "":
+            elif ch == '"':
                 quoted = False
-        elif ch == "":
+        elif ch == '"':
             quoted = True
         elif ch == ";":
             parts.append(value[start:index])
