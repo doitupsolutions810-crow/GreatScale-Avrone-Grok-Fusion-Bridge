@@ -227,6 +227,7 @@ class LinkTests(unittest.TestCase):
             "application/json", "APPLICATION/JSON", " application/json ",
             "application/json; charset=utf-8", 'application/json; charset="utf-8"',
             "application/json ; version = 1", "application/vnd.avrone+json; profile=compact",
+            'application/json; profile="https://example.invalid/a;b"',
         ]
         invalid = [
             "application/json;", "application/json; x:y", "application/json; charset=bad value",
