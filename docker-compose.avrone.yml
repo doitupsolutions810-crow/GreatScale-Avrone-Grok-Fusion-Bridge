@@ -11,7 +11,7 @@ services:
       - AVRONE_PORT=8710
       - AVRONE_HOST=0.0.0.0
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8710/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8710/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3

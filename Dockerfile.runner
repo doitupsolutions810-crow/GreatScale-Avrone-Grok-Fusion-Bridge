@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+WORKDIR /opt/fusion
+COPY requirements.txt .
+COPY bridge/requirements.txt requirements-bridge.txt
+COPY bridge bridge
+COPY tests tests
+COPY CONTRACT.md README.md pytest.ini verify.sh ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-bridge.txt
+ENV PYTHONPATH=/opt/fusion
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-m", "bridge.watchdog", "--", "python", "-m", "bridge.drill"]

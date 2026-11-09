@@ -1,0 +1,83 @@
+# Real stack for a host where Docker works.
+# test-runner executes verify's drill with no suite timeout.
+# Avrone is pinned by digest after `docker build` (see AVRONE_IMAGE below).
+# This VM has no Docker daemon, so ./verify.sh uses the mock peers instead.
+
+networks:
+  fusion:
+    name: fusion-hardened
+
+services:
+  avrone:
+    build:
+      context: .
+      dockerfile: Dockerfile.peer
+    image: ${AVRONE_IMAGE:-fusion-avrone:edge}
+    command: ["python", "-m", "bridge.harness", "serve", "--role", "avrone", "--host", "0.0.0.0", "--port", "8710"]
+    mem_limit: 256m
+    cpus: 0.5
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      AVRONE_PORT: "8710"
+    networks: [fusion]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8710/api/status')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  cognitive-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.peer
+    command: ["python", "-m", "bridge.harness", "serve", "--role", "ck", "--host", "0.0.0.0", "--port", "8090"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [fusion]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    networks: [fusion]
+    ports:
+      - "8474:8474"
+
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    command: ["python", "-m", "bridge.avrone_cyclekernal_link"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      AVRONE_BASE: http://avrone:8710
+      CK_BASE: http://cognitive-bridge:8090
+      FUSION_TOKEN: ${FUSION_TOKEN:-}
+      FUSION_STATE_PATH: /tmp/seen.json
+      FUSION_CYCLES: "0"
+      FUSION_HOST_MAP: avrone=avrone,cognitive-bridge=cognitive-bridge
+    depends_on:
+      avrone:
+        condition: service_healthy
+      cognitive-bridge:
+        condition: service_healthy
+    networks: [fusion]
+    restart: unless-stopped
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    environment:
+      FUSION_DOCKER: real
+    networks: [fusion]
+    command: ["python", "-m", "bridge.watchdog", "--", "python", "-m", "bridge.drill"]
