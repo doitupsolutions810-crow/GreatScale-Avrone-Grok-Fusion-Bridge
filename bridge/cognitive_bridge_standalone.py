@@ -6,8 +6,12 @@ findings tick curiosity. Decay pulls everything toward 0.5 baseline.
 """
 from __future__ import annotations
 
+import hmac
+import json
+import os
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="CognitiveBridge Standalone")
@@ -21,6 +25,10 @@ TRAITS = {
 }
 
 EVENTS: list[dict] = []
+SEEN_EVENTS: set[tuple[str, str]] = set()
+_CK_STARTED = time.time()
+_CK_BOOT = os.urandom(6).hex()
+_CK_RESTARTS = int(os.environ.get("CK_RESTARTS", "0") or "0")
 
 
 class EventIn(BaseModel):
@@ -33,7 +41,92 @@ class EventIn(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "traits": TRAITS, "events_seen": len(EVENTS), "ts": time.time()}
+    now = time.time()
+    return {
+        "status": "ok",
+        "version": "standalone",
+        "traits": TRAITS,
+        "events_seen": len(EVENTS),
+        "ts": now,
+        "started_at": _CK_STARTED,
+        "uptime_s": round(now - _CK_STARTED, 3),
+        "restarts": _CK_RESTARTS,
+        "boot": _CK_BOOT,
+        "mood": "neutral",
+    }
+
+
+@app.get("/v1/current_mood")
+def current_mood():
+    return {
+        "mood": "neutral",
+        "traits": ["Neutral-Baseline"],
+        "mood_dot": 0.5,
+        "ns_fitness": 0.0,
+        "genome_id": "gn-standalone",
+        "promote": {"action": "hold"},
+        "timestamp": time.time(),
+        "metrics": {"tick": time.time()},
+    }
+
+
+def _token_eq(got: str, expected: str) -> bool:
+    if not expected:
+        return False
+    left, right = got.encode("utf-8"), expected.encode("utf-8")
+    if len(left) != len(right):
+        return False
+    return hmac.compare_digest(left, right)
+
+
+@app.post("/v1/events")
+@app.post("/api/events")
+async def contract_events(request: Request):
+    """Contract intake. ``/api/events`` stays for the legacy helper. 413 is before auth."""
+    limit = 4096
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            size = int(declared)
+        except ValueError:
+            return JSONResponse({"detail": "bad content-length"}, status_code=400)
+        if size > limit:
+            return JSONResponse(
+                {"detail": f"request body too large (max {limit} bytes)"},
+                status_code=413,
+            )
+    raw = await request.body()
+    if len(raw) > limit:
+        return JSONResponse({"detail": f"request body too large (max {limit} bytes)"}, status_code=413)
+    expected = (os.environ.get("CK_FUSION_TOKEN") or os.environ.get("FUSION_TOKEN") or "").strip()
+    if expected:
+        got = request.headers.get("x-admin-token") or ""
+        if not _token_eq(got, expected):
+            return JSONResponse({"detail": "Bad admin token"}, status_code=401)
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw else None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JSONResponse({"detail": "body must be JSON"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"detail": "body must be JSON"}, status_code=400)
+    kind = str(data.get("kind") or "finding")
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    source = str(data.get("source") or "avrone")
+    run_id = str(data.get("run_id") or "run")
+    try:
+        ts = float(data.get("ts") or time.time())
+    except (TypeError, ValueError):
+        ts = time.time()
+    eid = str(data.get("id") or "")
+    key = (source, eid) if eid else None
+    if key and key in SEEN_EVENTS:
+        return {"accepted": True, "duplicate": True, "id": eid, "traits": TRAITS}
+    event = EventIn(source=source, kind=kind, run_id=run_id, payload=payload, ts=ts)
+    EVENTS.append(event.model_dump())
+    if key:
+        SEEN_EVENTS.add(key)
+    _apply_trait_update(event)
+    return {"accepted": True, "duplicate": False, "id": eid or "accepted", "traits": TRAITS}
 
 
 @app.get("/traits")
