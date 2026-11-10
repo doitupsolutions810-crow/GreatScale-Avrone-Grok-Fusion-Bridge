@@ -14,14 +14,30 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from bridge.contract import MAX_BODY_BYTES, Board, EventLog, normalize_event, normalize_post
 
 
 class _Server(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
-from urllib.parse import parse_qs, urlparse
 
-from bridge.contract import MAX_BODY_BYTES, Board, EventLog, normalize_event, normalize_post
+
+def _loads(body: bytes):
+    """Parse a body. A repeated key is a 400, not last-wins."""
+
+    def hook(pairs: list) -> dict:
+        obj: dict = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate key")
+            obj[key] = value
+        return obj
+
+    if not body:
+        return None
+    return json.loads(body.decode("utf-8"), object_pairs_hook=hook)
 
 
 class ContractStub:
@@ -188,8 +204,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, {"posts": posts, "count": len(posts), "boot": boot})
             return
         try:
-            data = json.loads(body.decode("utf-8")) if body else None
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            data = _loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             self._send(400, {"detail": "body must be JSON"})
             return
         post, err = normalize_post(data)
@@ -236,8 +252,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(int(step["status"]), {"detail": "scripted"}, extra=extra)
                 return
         try:
-            data = json.loads(body.decode("utf-8")) if body else None
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            data = _loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             self._send(400, {"detail": "body must be JSON"})
             return
         event, err = normalize_event(data)

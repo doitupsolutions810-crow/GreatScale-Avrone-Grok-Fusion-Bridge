@@ -25,7 +25,6 @@ projections are not posted again. Restart dedup is the state file at
 from __future__ import annotations
 
 import contextvars
-import contextvars
 import json
 import logging
 import math
@@ -54,7 +53,13 @@ from .contract import (
     valid_id,
 )
 from .settings import RelayConfig, load_config
-from .strict_fields import FieldError, choose_payload, parse_retry_after, validate_known_fields
+from .strict_fields import (
+    FieldError,
+    choose_payload,
+    parse_retry_after,
+    reject_non_finite,
+    validate_known_fields,
+)
 
 # Patched by tests that need to assert the sleep sequence without waiting.
 _sleep = time.sleep
@@ -65,6 +70,9 @@ _PERMANENT = frozenset({"too_large", "rejected"})
 _TRANSPORT = frozenset({"timeout", "transport"})
 # 429 and 500 are answered failures. Retry them with a bounded sleep, not a spin.
 _BACKOFF = frozenset({"timeout", "transport", "throttle", "upstream"})
+# A peer that answers with a huge body must not be buffered. 64 KiB covers
+# mood, health, and a blackboard page; anything larger is a failed hop.
+MAX_RESPONSE_BYTES = 65536
 # Opens the per-host breaker. A 500 responded; it is not a black hole.
 _BREAKER_ERRORS = frozenset({"timeout", "transport"})
 
@@ -187,6 +195,21 @@ def _status_error(code: int) -> str:
     return "rejected"
 
 
+def _read_capped(stream, limit: int = MAX_RESPONSE_BYTES) -> tuple[bytes, bool]:
+    """Read up to ``limit`` bytes. The second value is true when the body is longer."""
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        part = stream.read(min(8192, limit - total + 1))
+        if not part:
+            break
+        total += len(part)
+        if total > limit:
+            return b"", True
+        chunks.append(part)
+    return b"".join(chunks), False
+
+
 def _request(
     method: str,
     url: str,
@@ -224,8 +247,10 @@ def _request(
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = resp.read()
-            if not payload:
+            payload, overflow = _read_capped(resp)
+            if overflow:
+                result = HopResult(ok=False, error="transport", body="response_too_large")
+            elif not payload:
                 result = HopResult(ok=True, status=resp.status, body=None)
             else:
                 try:
@@ -236,7 +261,7 @@ def _request(
                     result = HopResult(ok=True, status=resp.status, body=parsed)
     except urllib.error.HTTPError as exc:
         try:
-            exc.read()
+            _read_capped(exc)
         except Exception:
             pass
         retry_after = None
@@ -323,10 +348,9 @@ def _load_state(path: str) -> tuple[_Track, int]:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(data, dict) or not isinstance(data.get("seen"), list):
             raise ValueError("state file is not a seen-set")
-        seen = {str(item) for item in data["seen"] if str(item)}
-        cursor = data.get("cursor") if isinstance(data.get("cursor"), str) else ""
-        raw_boots = data.get("boots") if isinstance(data.get("boots"), dict) else {}
-        boots = {str(key): str(value) for key, value in raw_boots.items() if str(value).strip()}
+        seen = _state_seen(data["seen"])
+        cursor = _state_cursor(data.get("cursor"))
+        boots = _state_boots(data.get("boots"))
         return _Track(seen, cursor, boots), 0
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return _Track(set(), "", {}), 1
@@ -355,6 +379,47 @@ def _save_state(path: str, track: _Track) -> bool:
 def _remember(stats: dict, path: str, track: _Track) -> None:
     if not _save_state(path, track):
         stats["state_errors"] += 1
+
+
+def _state_seen(items: list) -> set[str]:
+    """Only real strings. JSON null must not become the id ``None``."""
+    return {item for item in items if isinstance(item, str) and item}
+
+
+def _state_cursor(value: Any) -> str:
+    if isinstance(value, str) and (value == "" or valid_id(value)):
+        return value
+    return ""
+
+
+def _state_boots(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    boots: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value.strip()
+        else:
+            continue
+        if text and not any(char in text for char in "\r\n\x00"):
+            boots[key] = text[:80]
+    return boots
+
+
+def _event_ts(ts: Any) -> float:
+    """A finite number, or 0. Never NaN or Infinity, which are not JSON."""
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return 0.0
+    number = float(ts)
+    if not math.isfinite(number):
+        return 0.0
+    return number
 
 
 def _boot_value(body: Any) -> str:
@@ -428,8 +493,7 @@ def _event_from_post(post: dict, pid: str, cfg: RelayConfig) -> FusionEvent:
         }
         if winner == "text" and "text" not in chosen:
             payload = chosen
-    ts = post.get("ts")
-    when = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else 0.0
+    when = _event_ts(post.get("ts"))
     return FusionEvent(
         source="avrone",
         kind=kind,
@@ -603,6 +667,19 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
         return False
 
     new_cursor = track.cursor
+    # A cross-source collision is not an ack, but it must not pin every later
+    # post behind it. The cursor stays on the last id before the collision so
+    # the next poll reads that collision again.
+    hold_cursor = False
+
+    def _advance(pid: str, *, remember: bool = False) -> None:
+        nonlocal new_cursor
+        if not hold_cursor:
+            new_cursor = pid
+        if remember:
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
+
     for post in posts:
         if not isinstance(post, dict):
             stats["errors"] += 1
@@ -611,28 +688,25 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
         pid = _post_identity(post)
         if is_echo(post) or pid in track.seen:
             track.seen.add(pid)
-            new_cursor = pid
+            _advance(pid)
             continue
         text = clip_text(post.get("text"), cfg.max_text_chars)
         if not text and not isinstance(post.get("payload"), dict):
             stats["errors"] += 1
             stats["malformed"] += 1
             track.seen.add(pid)
-            new_cursor = pid
-            track.cursor = new_cursor
-            _remember(stats, cfg.state_path, track)
+            _advance(pid, remember=True)
             continue
         event = _event_from_post(post, pid, cfg)
         try:
             if isinstance(event.payload, dict):
+                reject_non_finite(event.payload)
                 validate_known_fields(event.payload)
         except FieldError:
             stats["rejected"] += 1
             stats["errors"] += 1
             track.seen.add(pid)
-            new_cursor = pid
-            track.cursor = new_cursor
-            _remember(stats, cfg.state_path, track)
+            _advance(pid, remember=True)
             continue
         result = deliver_to_cyclekernal(event, cfg)
         if _source_conflict(event.source, result):
@@ -645,22 +719,19 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
                 event.id,
                 stored,
             )
+            hold_cursor = True
             track.cursor = new_cursor
             _remember(stats, cfg.state_path, track)
-            return False
+            continue
         if result.ok:
             _accepted(stats, result, "forwarded")
             track.seen.add(pid)
-            new_cursor = pid
-            track.cursor = new_cursor
-            _remember(stats, cfg.state_path, track)
+            _advance(pid, remember=True)
             continue
         _account(stats, result)
         if result.error in _PERMANENT:
             track.seen.add(pid)
-            new_cursor = pid
-            track.cursor = new_cursor
-            _remember(stats, cfg.state_path, track)
+            _advance(pid, remember=True)
             continue
         # Auth, 404, 5xx, timeout, bad JSON: leave the id unseen and stop
         # this batch so a later post is not acked ahead of a failed one.

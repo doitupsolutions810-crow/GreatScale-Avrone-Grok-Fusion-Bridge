@@ -93,6 +93,26 @@ def parse_beta_t(value: Any) -> int | float | str:
     return value
 
 
+def reject_non_finite(value: Any, field: str = "payload", depth: int = 0) -> None:
+    """Reject NaN and Infinity anywhere in a payload, and refuse a deep nest.
+
+    ``json.dumps`` would emit ``NaN``, which is not JSON. A nest deeper than
+    32 is rejected here so a small hostile document cannot blow the stack.
+    """
+    if depth > 32:
+        raise FieldError(field, "nested too deep")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise FieldError(field, "non-finite")
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            reject_non_finite(item, field, depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            reject_non_finite(item, field, depth + 1)
+
+
 def validate_known_fields(payload: dict) -> dict[str, Any]:
     """Validate heat, cone_angle, and beta_t when present. Other keys are ignored."""
     if not isinstance(payload, dict):
@@ -107,13 +127,30 @@ def validate_known_fields(payload: dict) -> dict[str, Any]:
     return out
 
 
-def heat_from_wire(raw: str) -> dict[str, Any]:
-    """Parse one JSON object and keep the raw ``heat`` number token."""
+def loads_strict_object(raw: str) -> dict:
+    """Parse one JSON object. A repeated key is an error, not a silent last-wins."""
+
+    def hook(pairs: list) -> dict:
+        obj: dict = {}
+        for key, value in pairs:
+            if key in obj:
+                raise FieldError(str(key), "duplicate key")
+            obj[key] = value
+        return obj
+
     try:
-        obj = json.loads(raw)
+        parsed = json.loads(raw, object_pairs_hook=hook)
     except json.JSONDecodeError as exc:
         raise FieldError("heat", "malformed JSON") from exc
-    if not isinstance(obj, dict) or "heat" not in obj:
+    if not isinstance(parsed, dict):
+        raise FieldError("heat", "missing")
+    return parsed
+
+
+def heat_from_wire(raw: str) -> dict[str, Any]:
+    """Parse one JSON object and keep the raw ``heat`` number token."""
+    obj = loads_strict_object(raw)
+    if "heat" not in obj:
         raise FieldError("heat", "missing")
     return parse_heat(obj["heat"], literal=_raw_number_token(raw, "heat"))
 
@@ -159,7 +196,8 @@ def choose_payload(entry: dict) -> tuple[str, dict]:
     A body over 4096 bytes is rejected before either side is interpreted.
     """
     structured = entry.get("payload")
-    if isinstance(structured, dict):
+    # An empty object is not a structured payload. It must not hide ``text``.
+    if isinstance(structured, dict) and structured:
         return "payload", dict(structured)
     text = entry.get("text")
     if isinstance(text, str) and text.startswith("{"):

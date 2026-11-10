@@ -207,7 +207,13 @@ def dumps_utf8(value: dict) -> bytes:
     not a safe clip: the wrapper around it, and any multibyte character, can
     push the body over the cap before a peer ever looks at ``text``.
     """
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    return json.dumps(
+        value,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
 
 
 def _text_at(obj: dict, where: str) -> str | None:
