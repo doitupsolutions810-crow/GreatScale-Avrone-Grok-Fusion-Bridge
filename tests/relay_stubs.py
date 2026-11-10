@@ -139,11 +139,21 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         body = b""
         if method == "POST":
-            try:
-                declared = int(self.headers.get("Content-Length") or "0")
-            except ValueError:
+            if self.headers.get("Transfer-Encoding"):
+                self._send(400, {"detail": "transfer-encoding is not accepted"})
+                return
+            lengths = self.headers.get_all("Content-Length")
+            if not lengths:
+                declared = 0
+            elif len(lengths) != 1:
                 self._send(400, {"detail": "bad content-length"})
                 return
+            else:
+                try:
+                    declared = int(lengths[0].strip())
+                except ValueError:
+                    self._send(400, {"detail": "bad content-length"})
+                    return
             if declared < 0:
                 self._send(400, {"detail": "bad content-length"})
                 return

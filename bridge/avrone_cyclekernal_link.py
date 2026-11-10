@@ -319,7 +319,9 @@ def _request(
                 except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                     result = HopResult(ok=False, status=resp.status, error="bad_json", body=payload[:120])
                 else:
-                    if isinstance(parsed, dict) and (
+                    if isinstance(parsed, dict) and _bad_flag(parsed):
+                        result = HopResult(ok=False, status=resp.status, error="bad_json", body=parsed)
+                    elif isinstance(parsed, dict) and (
                         parsed.get("accepted") is False or parsed.get("posted") is False
                     ):
                         result = HopResult(ok=False, status=resp.status, error="declined", body=parsed)
@@ -619,16 +621,36 @@ def _scoped_key(source: str, event_id: str) -> str:
     return _idempotency_key(f"{source}:{event_id}")
 
 
+def _bad_flag(body: dict) -> bool:
+    """``accepted``, ``posted``, and ``duplicate`` are JSON booleans or absent.
+
+    A string ``"false"`` is not false, and a string ``"true"`` is not a duplicate.
+    """
+    return any(flag in body and not isinstance(body[flag], bool) for flag in ("accepted", "posted", "duplicate"))
+
+
+def _source_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
 def _source_conflict(sent_source: str, hop: HopResult) -> bool:
-    """True when duplicate:true names a different producer's copy of this id."""
-    if not hop.ok or not isinstance(hop.body, dict) or not hop.body.get("duplicate"):
+    """True when duplicate true names a different producer's copy of this id.
+
+    Comparison is on stripped strings. ``" avrone "`` is the same producer.
+    A non-string source is not a name, so it is not a proven conflict.
+    """
+    if not hop.ok or not isinstance(hop.body, dict) or hop.body.get("duplicate") is not True:
         return False
-    stored = hop.body.get("source")
-    if stored in (None, ""):
+    stored = _source_name(hop.body.get("source"))
+    if not stored:
         nested = hop.body.get("stored")
         if isinstance(nested, dict):
-            stored = nested.get("source")
-    return stored not in (None, "") and str(stored) != sent_source
+            stored = _source_name(nested.get("source"))
+    if not stored:
+        return False
+    return stored != _source_name(sent_source)
 
 
 def deliver_to_avrone(event: FusionEvent, cfg: RelayConfig | None = None) -> HopResult:
