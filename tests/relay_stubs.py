@@ -243,13 +243,26 @@ class _Handler(BaseHTTPRequestHandler):
             with stub.lock:
                 if stub.events_script:
                     step = stub.events_script.pop(0)
-            if step is not None and int(step.get("status", 200)) != 200:
+            if step is not None and (
+                int(step.get("status", 200)) != 200 or "raw" in step or "body" in step
+            ):
                 if step.get("delay"):
                     time.sleep(float(step["delay"]))
                 extra = {}
                 if step.get("retry_after") is not None:
                     extra["Retry-After"] = str(step["retry_after"])
-                self._send(int(step["status"]), {"detail": "scripted"}, extra=extra)
+                raw_body = step.get("raw")
+                if isinstance(raw_body, str):
+                    raw_body = raw_body.encode()
+                script_body = step.get("body")
+                if not isinstance(script_body, dict):
+                    script_body = None if raw_body is not None else {"detail": "scripted"}
+                self._send(
+                    int(step.get("status", 200)),
+                    script_body,
+                    raw=raw_body if isinstance(raw_body, (bytes, bytearray)) else None,
+                    extra=extra,
+                )
                 return
         try:
             data = _loads(body)

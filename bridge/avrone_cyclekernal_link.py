@@ -190,9 +190,50 @@ def _status_error(code: int) -> str:
         return "too_large"
     if code in (404, 405):
         return "missing"
+    if code == 409:
+        # A conflict is not a permanent drop. The body was not stored as ours.
+        return "conflict"
+    if 300 <= code < 400:
+        return "redirect"
     if code >= 500:
         return "upstream"
     return "rejected"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is a failed hop. The admin token must not be sent to Location."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _url_problem(url: str) -> str | None:
+    """Refuse schemes and credentials the relay must not touch."""
+    if any(char in url for char in "\r\n\x00"):
+        return "bad_url"
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return "bad_scheme"
+    if parts.username or parts.password:
+        return "userinfo"
+    return None
+
+
+def _loads_response(payload: bytes) -> Any:
+    """Parse a response. A repeated key is an error, not last-wins."""
+
+    def hook(pairs: list) -> dict:
+        obj: dict = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate key")
+            obj[key] = value
+        return obj
+
+    return json.loads(payload.decode("utf-8"), object_pairs_hook=hook)
 
 
 def _read_capped(stream, limit: int = MAX_RESPONSE_BYTES) -> tuple[bytes, bool]:
@@ -220,6 +261,11 @@ def _request(
     token: str = "",
     idempotency_key: str = "",
 ) -> HopResult:
+    problem = _url_problem(url)
+    if problem:
+        return HopResult(ok=False, error="transport", body=problem)
+    if token and any(char in token for char in "\r\n\x00"):
+        return HopResult(ok=False, error="auth", body="bad_token")
     breaker = _cycle_breaker.get()
     if breaker is not None and breaker.blocked(url):
         return HopResult(ok=False, error="circuit")
@@ -246,7 +292,7 @@ def _request(
         headers["Idempotency-Key"] = key
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             payload, overflow = _read_capped(resp)
             if overflow:
                 result = HopResult(ok=False, error="transport", body="response_too_large")
@@ -254,11 +300,16 @@ def _request(
                 result = HopResult(ok=True, status=resp.status, body=None)
             else:
                 try:
-                    parsed = json.loads(payload.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                    parsed = _loads_response(payload)
+                except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                     result = HopResult(ok=False, status=resp.status, error="bad_json", body=payload[:120])
                 else:
-                    result = HopResult(ok=True, status=resp.status, body=parsed)
+                    if isinstance(parsed, dict) and (
+                        parsed.get("accepted") is False or parsed.get("posted") is False
+                    ):
+                        result = HopResult(ok=False, status=resp.status, error="declined", body=parsed)
+                    else:
+                        result = HopResult(ok=True, status=resp.status, body=parsed)
     except urllib.error.HTTPError as exc:
         try:
             _read_capped(exc)
@@ -319,6 +370,12 @@ def _account(stats: dict, hop: HopResult) -> None:
         stats["missing_routes"] += 1
     elif err == "upstream":
         stats["upstream_errors"] += 1
+    elif err == "conflict":
+        stats["conflicts"] += 1
+    elif err == "declined":
+        stats["rejected"] += 1
+    elif err == "redirect":
+        stats["redirects"] = stats.get("redirects", 0) + 1
     elif err == "throttle":
         stats["throttled"] += 1
         if hop.retry_after is not None:
@@ -631,6 +688,7 @@ def _empty_stats(state_errors: int) -> dict:
         "circuit_skipped": 0,
         "deadline_stops": 0,
         "conflicts": 0,
+        "redirects": 0,
         "reconciled": 0,
     }
 
