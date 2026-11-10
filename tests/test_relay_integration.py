@@ -148,7 +148,7 @@ def test_happy_path_forwards_once_and_mirrors(peers):
     assert {post["kind"] for post in mirrors} == {"conclusion", "finding"}
     assert all(post["role"] == "cyclekernal-relay" for post in mirrors)
     assert any(
-        hit["path"] == "/v1/events" and hit["token"] == TOKEN and hit["idempotency"] == "find0000001"
+        hit["path"] == "/v1/events" and hit["token"] == TOKEN and hit["idempotency"] == "avrone:find0000001"
         for hit in ck.hits
     )
     mirror_keys = [hit["idempotency"] for hit in av.hits if hit["method"] == "POST"]
@@ -408,7 +408,7 @@ def test_black_hole_host_does_not_cost_a_timeout_per_event(peers, monkeypatch):
     elapsed = time.monotonic() - started
     event_hits = [hit for hit in ck.hits if hit["path"] == "/v1/events"]
     assert len(event_hits) == 1, (len(event_hits), stats)
-    assert event_hits[0]["idempotency"] == "find00000000"
+    assert event_hits[0]["idempotency"] == "avrone:find00000000"
     assert stats["forwarded"] == 0
     assert stats["timeouts"] == 1
     assert stats["circuit_opened"] == 1

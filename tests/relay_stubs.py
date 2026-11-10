@@ -54,6 +54,7 @@ class ContractStub:
         self.hits: list[dict] = []
         self.bodies: list[tuple[str, bytes]] = []
         self.events_script: list[dict] = []
+        self.legacy_bare_id = False
         self.port = 0
         self.base = ""
         self._httpd: ThreadingHTTPServer | None = None
@@ -244,8 +245,24 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, {"detail": err or "body must be a JSON object"})
             return
         with stub.lock:
+            if stub.legacy_bare_id:
+                stored = stub.log.bare_id(str(event["id"]))
+                if stored is not None:
+                    self._send(200, {
+                        "accepted": True,
+                        "duplicate": True,
+                        "id": event["id"],
+                        "source": stored.get("source"),
+                    })
+                    return
             duplicate = stub.log.add(event)
-        self._send(200, {"accepted": True, "duplicate": duplicate, "id": event["id"]})
+            stored_source = event.get("source")
+        self._send(200, {
+            "accepted": True,
+            "duplicate": duplicate,
+            "id": event["id"],
+            "source": stored_source,
+        })
 
     def _send(self, code: int, payload: dict | None = None, raw: bytes | None = None, extra: dict | None = None) -> None:
         data = raw if raw is not None else json.dumps(payload).encode("utf-8")

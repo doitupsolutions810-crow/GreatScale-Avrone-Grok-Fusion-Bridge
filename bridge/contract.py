@@ -404,17 +404,29 @@ class Board:
 
 
 class EventLog:
-    """Id-deduped ``/v1/events`` log. A repeated id is accepted and not stored twice."""
+    """``/v1/events`` log deduped on ``(source, id)``.
+
+    The same id from two producers is two events. A repeated pair keeps the
+    first body and does not replace it.
+    """
 
     def __init__(self) -> None:
-        self.events: OrderedDict[str, dict] = OrderedDict()
+        self.events: OrderedDict[tuple[str, str], dict] = OrderedDict()
 
     def add(self, event: dict) -> bool:
-        """Return True when ``event['id']`` was already stored."""
-        if event["id"] in self.events:
+        """Return True when this ``(source, id)`` was already stored."""
+        key = (str(event.get("source") or ""), str(event["id"]))
+        if key in self.events:
             return True
-        self.events[event["id"]] = event
+        self.events[key] = event
         return False
+
+    def bare_id(self, event_id: str) -> dict | None:
+        """First stored event with this id, any source. For the legacy bare-id bug."""
+        for event in self.events.values():
+            if event.get("id") == event_id:
+                return event
+        return None
 
     def list(self) -> list[dict]:
         return [dict(event) for event in self.events.values()]

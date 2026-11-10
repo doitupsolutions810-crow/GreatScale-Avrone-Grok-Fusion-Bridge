@@ -207,10 +207,10 @@ What that branch serves:
 - `POST /v1/events` and the alias `POST /events`.
 - Auth: `X-Admin-Token`, `Authorization: Bearer`, or `X-Events-Token`. `CK_FUSION_TOKEN` wins over `FUSION_TOKEN`. `CK_EVENTS_TOKEN` and `CK_EVENTS_TOKEN_PREVIOUS` also match. No token configured is 403. A wrong token is 401 `{"detail":"Bad admin token"}`.
 - A declared or buffered body over 4096 bytes (or a lower `CK_EVENTS_MAX_BYTES`) is 413 **before** the token is checked. Exactly 4096 is accepted.
-- A repeated id, including one already evicted from the ring, returns `{"accepted": true, "duplicate": true, "id": "..."}` and does not append or replace. The route does not move mood.
+- Uniqueness is `(source, id)`. A repeated pair, including one already evicted from the ring, returns `{"accepted": true, "duplicate": true, "id": "...", "source": "<stored source>"}` and does not append or replace. The route does not move mood. The response must include the stored `source` so a bare-id collision is visible.
 - `GET /health` also returns `mode`, `mood`, `relay`, and `events`. Those change every read. The relay still fingerprints only `status`, `version`, and `mood`, so a ticking relay counter cannot repost health.
 
-The relay also sends `Idempotency-Key` set to the Avrone entry id (the same string as the JSON `id`). PR #14 dedupes on that id and ignores the header. The header is there so a retry of the same entry is one key even for a proxy that never looks inside the body.
+The relay always sends `source` (Avrone board posts are `source: "avrone"`). `Idempotency-Key` is `source:id`, for example `avrone:find0000001`. If `duplicate` is true and the stored `source` differs, the relay does not ack.
 
 ### Required body (what PR #14 checks)
 
@@ -275,7 +275,7 @@ This route stores and acknowledges the event. It does not have to move `mood` or
 
 One cycle, in order:
 
-1. `GET /api/blackboard`. Forward each new post with `POST /v1/events` and `Idempotency-Key: <that post's id>`. Skip the relay's own mirrors: `origin_node` `fusion-bridge`, `role` `cyclekernal-relay`, agent `cyclekernal:*` (any kind after the colon, case-insensitive), ids minted as `ck-health-` / `ck-mood-` / `ck-evidence-`, or text that is the mirror JSON with that agent embedded. Health mirroring must not be posted back, or CycleKernal's `events` counter on `/health` would churn a new mirror every cycle.
+1. `GET /api/blackboard`. Forward each new post with `POST /v1/events`, `source` set, and `Idempotency-Key: <source>:<id>`. A `duplicate: true` whose stored source differs is a conflict: log it, do not ack, retry. Skip the relay's own mirrors: `origin_node` `fusion-bridge`, `role` `cyclekernal-relay`, agent `cyclekernal:*` (any kind after the colon, case-insensitive), ids minted as `ck-health-` / `ck-mood-` / `ck-evidence-`, or text that is the mirror JSON with that agent embedded. Health mirroring must not be posted back, or CycleKernal's `events` counter on `/health` would churn a new mirror every cycle.
 2. `GET /v1/current_mood`. If the stable projection changed, `POST /api/blackboard` a conclusion whose text includes `"agent":"cyclekernal:mood"`.
 3. `GET /health`. If the stable projection changed, `POST /api/blackboard` a finding whose text includes `"agent":"cyclekernal:health"`.
 
@@ -293,7 +293,9 @@ Optional keys `heat`, `cone_angle`, and `beta_t` are syntax checks only. They do
 | `cone_angle` | finite JSON number | any string, including base64, `""`, and strings that would parse only after stripping whitespace or comments |
 | `beta_t` | finite number, or a string without Cc/Cf/Cs characters. Emoji is kept. | zero-width and other format characters; a string that is itself a JSON object or array |
 
-If both a structured `payload` object and `text` are present and the HTTP body is within 4096 bytes, `payload` wins and `text` is not parsed over it. A body over 4096 bytes is 413 before that choice. The event log keeps the first write for an id; later posts with the same id are explicit duplicates.
+The relay always sends `source`. Avrone board posts use `source: "avrone"`. `Idempotency-Key` is `source:id`, for example `avrone:find0000001`. Uniqueness on `POST /v1/events` is **`(source, id)`**. A repeated pair returns `duplicate: true` and the stored `source`, and does not replace the first body. If `duplicate` is true and that stored source differs from the source that was sent, the relay does not ack: it logs the collision and retries. A duplicate whose stored source matches is an ack. PR #14 still dedupes on the bare id; that is the collision this rule closes.
+
+If both a structured `payload` object and `text` are present and the HTTP body is within 4096 bytes, `payload` wins and `text` is not parsed over it. A body over 4096 bytes is 413 before that choice.
 
 `AVRONE_URL` is used only when `AVRONE_BASE` is unset. An IPv6 literal must be bracketed (`http://[::1]:8710`).
 

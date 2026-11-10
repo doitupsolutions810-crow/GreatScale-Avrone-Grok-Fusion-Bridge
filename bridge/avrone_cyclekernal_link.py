@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextvars
 import contextvars
 import json
+import logging
 import math
 import os
 import socket
@@ -57,6 +58,7 @@ from .strict_fields import FieldError, choose_payload, parse_retry_after, valida
 
 # Patched by tests that need to assert the sleep sequence without waiting.
 _sleep = time.sleep
+log = logging.getLogger("fusion.relay")
 
 # A 400/413 will not start working on retry. A 404 might, once the other repo ships.
 _PERMANENT = frozenset({"too_large", "rejected"})
@@ -472,8 +474,25 @@ def deliver_to_cyclekernal(event: FusionEvent, cfg: RelayConfig | None = None) -
         encode_bounded(body, cfg.max_body_bytes),
         cfg,
         cfg.ck_token,
-        event.id,
+        _scoped_key(event.source, event.id),
     )
+
+
+def _scoped_key(source: str, event_id: str) -> str:
+    """Idempotency-Key includes source so bare ids cannot collide across producers."""
+    return _idempotency_key(f"{source}:{event_id}")
+
+
+def _source_conflict(sent_source: str, hop: HopResult) -> bool:
+    """True when duplicate:true names a different producer's copy of this id."""
+    if not hop.ok or not isinstance(hop.body, dict) or not hop.body.get("duplicate"):
+        return False
+    stored = hop.body.get("source")
+    if stored in (None, ""):
+        nested = hop.body.get("stored")
+        if isinstance(nested, dict):
+            stored = nested.get("source")
+    return stored not in (None, "") and str(stored) != sent_source
 
 
 def deliver_to_avrone(event: FusionEvent, cfg: RelayConfig | None = None) -> HopResult:
@@ -547,6 +566,7 @@ def _empty_stats(state_errors: int) -> dict:
         "circuit_opened": 0,
         "circuit_skipped": 0,
         "deadline_stops": 0,
+        "conflicts": 0,
         "reconciled": 0,
     }
 
@@ -615,6 +635,19 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
             _remember(stats, cfg.state_path, track)
             continue
         result = deliver_to_cyclekernal(event, cfg)
+        if _source_conflict(event.source, result):
+            stored = result.body.get("source") if isinstance(result.body, dict) else None
+            stats["conflicts"] += 1
+            stats["errors"] += 1
+            log.warning(
+                "id collision on CycleKernal: sent source=%s id=%s but stored source=%s; not acking",
+                event.source,
+                event.id,
+                stored,
+            )
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
+            return False
         if result.ok:
             _accepted(stats, result, "forwarded")
             track.seen.add(pid)
