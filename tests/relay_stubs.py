@@ -144,6 +144,9 @@ class _Handler(BaseHTTPRequestHandler):
             except ValueError:
                 self._send(400, {"detail": "bad content-length"})
                 return
+            if declared < 0:
+                self._send(400, {"detail": "bad content-length"})
+                return
             if declared > stub.max_body:
                 if declared <= 1_000_000:
                     self.rfile.read(declared)
@@ -243,6 +246,9 @@ class _Handler(BaseHTTPRequestHandler):
             with stub.lock:
                 if stub.events_script:
                     step = stub.events_script.pop(0)
+            if step is not None and step.get("drop"):
+                self.close_connection = True
+                return
             if step is not None and (
                 int(step.get("status", 200)) != 200 or "raw" in step or "body" in step
             ):

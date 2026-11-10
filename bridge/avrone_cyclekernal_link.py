@@ -106,12 +106,18 @@ class _HostBreaker:
         state = self._hosts.get(_host_of(url))
         if not state or not state["open"]:
             return False
-        if time.monotonic() >= state["until"]:
-            if state["probing"]:
-                return True
+        if time.monotonic() < state["until"]:
+            return True
+        # Cooldown is over. One probe may run; a second call waits for it.
+        return bool(state["probing"])
+
+    def arm_probe(self, url: str) -> None:
+        """Mark the one allowed probe. Call this only when a dial is about to start."""
+        if self.threshold <= 0:
+            return
+        state = self._hosts.get(_host_of(url))
+        if state and state["open"] and time.monotonic() >= state["until"]:
             state["probing"] = True
-            return False
-        return True
 
     def observe(self, url: str, error: str | None) -> bool:
         """Record the outcome. Return True when this call opened the circuit."""
@@ -119,7 +125,11 @@ class _HostBreaker:
             return False
         host = _host_of(url)
         if error not in _BREAKER_ERRORS:
-            if error is None:
+            state = self._hosts.get(host)
+            # Success clears the host. A probe that received any HTTP answer
+            # (500, 404, 401) clears it too: the peer responded, so it is not
+            # a black hole. Leaving ``probing`` set would skip the host forever.
+            if error is None or (state and state.get("probing")):
                 self._hosts.pop(host, None)
             return False
         state = self._hosts.setdefault(
@@ -193,6 +203,9 @@ def _status_error(code: int) -> str:
     if code == 409:
         # A conflict is not a permanent drop. The body was not stored as ours.
         return "conflict"
+    if code in (408, 425):
+        # The peer answered. Retry, and do not treat it as a black hole.
+        return "upstream"
     if 300 <= code < 400:
         return "redirect"
     if code >= 500:
@@ -291,6 +304,8 @@ def _request(
     if key:
         headers["Idempotency-Key"] = key
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    if breaker is not None:
+        breaker.arm_probe(url)
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
             payload, overflow = _read_capped(resp)
