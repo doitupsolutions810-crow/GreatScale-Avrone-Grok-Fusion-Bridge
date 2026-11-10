@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -52,6 +53,7 @@ class ContractStub:
         self.accepting = True
         self.hits: list[dict] = []
         self.bodies: list[tuple[str, bytes]] = []
+        self.events_script: list[dict] = []
         self.port = 0
         self.base = ""
         self._httpd: ThreadingHTTPServer | None = None
@@ -65,13 +67,20 @@ class ContractStub:
                 raise ValueError("injected post needs an id")
             self.board.posts[pid] = post
 
-    def start(self) -> "ContractStub":
+    def start(self, host: str = "127.0.0.1") -> "ContractStub":
         port = self.port or 0
-        httpd = _Server(("127.0.0.1", port), _Handler)
+        if ":" in host:
+            class _V6(_Server):
+                address_family = socket.AF_INET6
+            server_cls = _V6
+        else:
+            server_cls = _Server
+        httpd = server_cls((host, port), _Handler)
         httpd.stub = self  # type: ignore[attr-defined]
         self._httpd = httpd
         self.port = httpd.server_address[1]
-        self.base = f"http://127.0.0.1:{self.port}"
+        shown = f"[{host}]" if ":" in host else host
+        self.base = f"http://{shown}:{self.port}"
         self._thread = threading.Thread(target=httpd.serve_forever, name=f"stub-{self.kind}", daemon=True)
         self._thread.start()
         return self
@@ -136,6 +145,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "token": token,
                 "n": len(body),
                 "idempotency": self.headers.get("Idempotency-Key"),
+                "t": time.monotonic(),
             })
             if method == "POST":
                 stub.bodies.append((path, body))
@@ -211,6 +221,19 @@ class _Handler(BaseHTTPRequestHandler):
             payload["metrics"] = {"tick": time.time()}
             self._send(200, payload)
             return
+        if path == "/v1/events" and method == "POST":
+            step = None
+            with stub.lock:
+                if stub.events_script:
+                    step = stub.events_script.pop(0)
+            if step is not None and int(step.get("status", 200)) != 200:
+                if step.get("delay"):
+                    time.sleep(float(step["delay"]))
+                extra = {}
+                if step.get("retry_after") is not None:
+                    extra["Retry-After"] = str(step["retry_after"])
+                self._send(int(step["status"]), {"detail": "scripted"}, extra=extra)
+                return
         try:
             data = json.loads(body.decode("utf-8")) if body else None
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -224,12 +247,14 @@ class _Handler(BaseHTTPRequestHandler):
             duplicate = stub.log.add(event)
         self._send(200, {"accepted": True, "duplicate": duplicate, "id": event["id"]})
 
-    def _send(self, code: int, payload: dict | None = None, raw: bytes | None = None) -> None:
+    def _send(self, code: int, payload: dict | None = None, raw: bytes | None = None, extra: dict | None = None) -> None:
         data = raw if raw is not None else json.dumps(payload).encode("utf-8")
         try:
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            for key, value in (extra or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):

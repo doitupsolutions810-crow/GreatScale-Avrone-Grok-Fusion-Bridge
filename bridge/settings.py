@@ -128,7 +128,7 @@ def load_config() -> RelayConfig:
     if max_text < 8:
         max_text = 8
     return RelayConfig(
-        avrone_base=_env_str("AVRONE_BASE", DEFAULT_AVRONE_BASE).rstrip("/"),
+        avrone_base=(_env_str("AVRONE_BASE") or _env_str("AVRONE_URL") or DEFAULT_AVRONE_BASE).rstrip("/"),
         ck_base=_env_str("CK_BASE", DEFAULT_CK_BASE).rstrip("/"),
         avrone_token=avrone_token,
         ck_token=ck_token,

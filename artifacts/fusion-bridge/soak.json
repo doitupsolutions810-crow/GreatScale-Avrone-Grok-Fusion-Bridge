@@ -1,0 +1,454 @@
+{
+  "label": "new-soak-harness",
+  "seconds_requested": 60.0,
+  "seconds_measured": 60.00005915899999,
+  "target_hz": 1000.0,
+  "lambda_offered_per_s": 999.9990140176391,
+  "mu_delivered_per_s": 998.6656819989488,
+  "queue_max": 256,
+  "peak_backlog": 1,
+  "end_backlog": 0,
+  "drain_s": 3.87500000442742e-06,
+  "counts": {
+    "offered": 60000,
+    "queued": 59920,
+    "rejected_late": 80,
+    "rejected_backpressure": 0,
+    "delivered": 59920,
+    "duplicate": 0,
+    "failed_http": 0
+  },
+  "lost": 0,
+  "samples": [
+    {
+      "t_s": 0.0,
+      "backlog": 0,
+      "offered": 1,
+      "delivered": 0,
+      "vm_rss_kb": 24912
+    },
+    {
+      "t_s": 1.0,
+      "backlog": 0,
+      "offered": 1001,
+      "delivered": 1000,
+      "vm_rss_kb": 28148
+    },
+    {
+      "t_s": 2.001,
+      "backlog": 0,
+      "offered": 2002,
+      "delivered": 2001,
+      "vm_rss_kb": 29652
+    },
+    {
+      "t_s": 3.002,
+      "backlog": 0,
+      "offered": 3003,
+      "delivered": 3002,
+      "vm_rss_kb": 31144
+    },
+    {
+      "t_s": 4.002,
+      "backlog": 0,
+      "offered": 4003,
+      "delivered": 4002,
+      "vm_rss_kb": 32556
+    },
+    {
+      "t_s": 5.002,
+      "backlog": 0,
+      "offered": 5003,
+      "delivered": 5002,
+      "vm_rss_kb": 33956
+    },
+    {
+      "t_s": 6.003,
+      "backlog": 0,
+      "offered": 6004,
+      "delivered": 6003,
+      "vm_rss_kb": 35676
+    },
+    {
+      "t_s": 7.004,
+      "backlog": 0,
+      "offered": 7005,
+      "delivered": 7004,
+      "vm_rss_kb": 37064
+    },
+    {
+      "t_s": 8.004,
+      "backlog": 0,
+      "offered": 8005,
+      "delivered": 8004,
+      "vm_rss_kb": 38444
+    },
+    {
+      "t_s": 9.005,
+      "backlog": 0,
+      "offered": 9006,
+      "delivered": 9005,
+      "vm_rss_kb": 39836
+    },
+    {
+      "t_s": 10.005,
+      "backlog": 0,
+      "offered": 10006,
+      "delivered": 10005,
+      "vm_rss_kb": 41212
+    },
+    {
+      "t_s": 11.005,
+      "backlog": 0,
+      "offered": 11006,
+      "delivered": 11005,
+      "vm_rss_kb": 43008
+    },
+    {
+      "t_s": 12.005,
+      "backlog": 0,
+      "offered": 12006,
+      "delivered": 12005,
+      "vm_rss_kb": 44396
+    },
+    {
+      "t_s": 13.005,
+      "backlog": 0,
+      "offered": 13006,
+      "delivered": 13005,
+      "vm_rss_kb": 45784
+    },
+    {
+      "t_s": 14.006,
+      "backlog": 0,
+      "offered": 14007,
+      "delivered": 14006,
+      "vm_rss_kb": 47184
+    },
+    {
+      "t_s": 15.006,
+      "backlog": 0,
+      "offered": 15007,
+      "delivered": 15006,
+      "vm_rss_kb": 48564
+    },
+    {
+      "t_s": 16.006,
+      "backlog": 0,
+      "offered": 16007,
+      "delivered": 16006,
+      "vm_rss_kb": 49964
+    },
+    {
+      "t_s": 17.007,
+      "backlog": 0,
+      "offered": 17008,
+      "delivered": 17007,
+      "vm_rss_kb": 51348
+    },
+    {
+      "t_s": 18.007,
+      "backlog": 0,
+      "offered": 18008,
+      "delivered": 18007,
+      "vm_rss_kb": 53020
+    },
+    {
+      "t_s": 19.007,
+      "backlog": 0,
+      "offered": 19008,
+      "delivered": 19007,
+      "vm_rss_kb": 54412
+    },
+    {
+      "t_s": 20.008,
+      "backlog": 0,
+      "offered": 20009,
+      "delivered": 20008,
+      "vm_rss_kb": 55796
+    },
+    {
+      "t_s": 21.009,
+      "backlog": 0,
+      "offered": 21010,
+      "delivered": 21009,
+      "vm_rss_kb": 57184
+    },
+    {
+      "t_s": 22.01,
+      "backlog": 0,
+      "offered": 22011,
+      "delivered": 22010,
+      "vm_rss_kb": 59616
+    },
+    {
+      "t_s": 23.011,
+      "backlog": 0,
+      "offered": 23012,
+      "delivered": 23011,
+      "vm_rss_kb": 61004
+    },
+    {
+      "t_s": 24.012,
+      "backlog": 0,
+      "offered": 24013,
+      "delivered": 24012,
+      "vm_rss_kb": 62396
+    },
+    {
+      "t_s": 25.012,
+      "backlog": 0,
+      "offered": 25013,
+      "delivered": 25012,
+      "vm_rss_kb": 63780
+    },
+    {
+      "t_s": 26.013,
+      "backlog": 0,
+      "offered": 26014,
+      "delivered": 26013,
+      "vm_rss_kb": 65164
+    },
+    {
+      "t_s": 27.013,
+      "backlog": 0,
+      "offered": 27014,
+      "delivered": 27013,
+      "vm_rss_kb": 66548
+    },
+    {
+      "t_s": 28.014,
+      "backlog": 0,
+      "offered": 28015,
+      "delivered": 28014,
+      "vm_rss_kb": 67936
+    },
+    {
+      "t_s": 29.014,
+      "backlog": 0,
+      "offered": 29015,
+      "delivered": 29014,
+      "vm_rss_kb": 69324
+    },
+    {
+      "t_s": 30.015,
+      "backlog": 0,
+      "offered": 30016,
+      "delivered": 30015,
+      "vm_rss_kb": 70700
+    },
+    {
+      "t_s": 31.015,
+      "backlog": 0,
+      "offered": 31016,
+      "delivered": 31015,
+      "vm_rss_kb": 72088
+    },
+    {
+      "t_s": 32.016,
+      "backlog": 0,
+      "offered": 32017,
+      "delivered": 32016,
+      "vm_rss_kb": 73468
+    },
+    {
+      "t_s": 33.017,
+      "backlog": 0,
+      "offered": 33018,
+      "delivered": 33018,
+      "vm_rss_kb": 74860
+    },
+    {
+      "t_s": 34.017,
+      "backlog": 1,
+      "offered": 34018,
+      "delivered": 34017,
+      "vm_rss_kb": 76240
+    },
+    {
+      "t_s": 35.017,
+      "backlog": 0,
+      "offered": 35018,
+      "delivered": 35017,
+      "vm_rss_kb": 77628
+    },
+    {
+      "t_s": 36.017,
+      "backlog": 0,
+      "offered": 36018,
+      "delivered": 36017,
+      "vm_rss_kb": 79004
+    },
+    {
+      "t_s": 37.018,
+      "backlog": 0,
+      "offered": 37019,
+      "delivered": 37018,
+      "vm_rss_kb": 80392
+    },
+    {
+      "t_s": 38.019,
+      "backlog": 1,
+      "offered": 38020,
+      "delivered": 37989,
+      "vm_rss_kb": 81736
+    },
+    {
+      "t_s": 39.019,
+      "backlog": 0,
+      "offered": 39020,
+      "delivered": 38989,
+      "vm_rss_kb": 83120
+    },
+    {
+      "t_s": 40.02,
+      "backlog": 0,
+      "offered": 40021,
+      "delivered": 39991,
+      "vm_rss_kb": 84520
+    },
+    {
+      "t_s": 41.021,
+      "backlog": 0,
+      "offered": 41022,
+      "delivered": 40991,
+      "vm_rss_kb": 85896
+    },
+    {
+      "t_s": 42.021,
+      "backlog": 0,
+      "offered": 42022,
+      "delivered": 41991,
+      "vm_rss_kb": 87292
+    },
+    {
+      "t_s": 43.021,
+      "backlog": 0,
+      "offered": 43022,
+      "delivered": 42991,
+      "vm_rss_kb": 88676
+    },
+    {
+      "t_s": 44.022,
+      "backlog": 0,
+      "offered": 44023,
+      "delivered": 43992,
+      "vm_rss_kb": 91864
+    },
+    {
+      "t_s": 45.022,
+      "backlog": 0,
+      "offered": 45023,
+      "delivered": 44992,
+      "vm_rss_kb": 93256
+    },
+    {
+      "t_s": 46.023,
+      "backlog": 0,
+      "offered": 46024,
+      "delivered": 45993,
+      "vm_rss_kb": 94644
+    },
+    {
+      "t_s": 47.024,
+      "backlog": 0,
+      "offered": 47025,
+      "delivered": 46994,
+      "vm_rss_kb": 96048
+    },
+    {
+      "t_s": 48.024,
+      "backlog": 0,
+      "offered": 48025,
+      "delivered": 47994,
+      "vm_rss_kb": 97432
+    },
+    {
+      "t_s": 49.025,
+      "backlog": 0,
+      "offered": 49026,
+      "delivered": 48995,
+      "vm_rss_kb": 98828
+    },
+    {
+      "t_s": 50.026,
+      "backlog": 0,
+      "offered": 50027,
+      "delivered": 49996,
+      "vm_rss_kb": 100208
+    },
+    {
+      "t_s": 51.026,
+      "backlog": 0,
+      "offered": 51027,
+      "delivered": 50996,
+      "vm_rss_kb": 101592
+    },
+    {
+      "t_s": 52.027,
+      "backlog": 0,
+      "offered": 52028,
+      "delivered": 51997,
+      "vm_rss_kb": 102976
+    },
+    {
+      "t_s": 53.027,
+      "backlog": 0,
+      "offered": 53028,
+      "delivered": 52998,
+      "vm_rss_kb": 104360
+    },
+    {
+      "t_s": 54.028,
+      "backlog": 0,
+      "offered": 54029,
+      "delivered": 53998,
+      "vm_rss_kb": 105740
+    },
+    {
+      "t_s": 55.029,
+      "backlog": 0,
+      "offered": 55030,
+      "delivered": 54999,
+      "vm_rss_kb": 107128
+    },
+    {
+      "t_s": 56.029,
+      "backlog": 0,
+      "offered": 56030,
+      "delivered": 55999,
+      "vm_rss_kb": 108800
+    },
+    {
+      "t_s": 57.03,
+      "backlog": 0,
+      "offered": 57031,
+      "delivered": 57000,
+      "vm_rss_kb": 110192
+    },
+    {
+      "t_s": 58.031,
+      "backlog": 0,
+      "offered": 58032,
+      "delivered": 58001,
+      "vm_rss_kb": 111588
+    },
+    {
+      "t_s": 59.032,
+      "backlog": 0,
+      "offered": 59033,
+      "delivered": 59002,
+      "vm_rss_kb": 112980
+    }
+  ],
+  "rss_start_kb": {
+    "vm_rss_kb": 24792,
+    "vm_hwm_kb": 24792
+  },
+  "rss_end_kb": {
+    "vm_rss_kb": 114252,
+    "vm_hwm_kb": 114252
+  },
+  "rss_peak_hwm_kb": 114252,
+  "stored_events": 59920
+}

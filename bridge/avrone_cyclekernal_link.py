@@ -53,6 +53,7 @@ from .contract import (
     valid_id,
 )
 from .settings import RelayConfig, load_config
+from .strict_fields import FieldError, choose_payload, parse_retry_after, validate_known_fields
 
 # Patched by tests that need to assert the sleep sequence without waiting.
 _sleep = time.sleep
@@ -60,6 +61,8 @@ _sleep = time.sleep
 # A 400/413 will not start working on retry. A 404 might, once the other repo ships.
 _PERMANENT = frozenset({"too_large", "rejected"})
 _TRANSPORT = frozenset({"timeout", "transport"})
+# 429 and 500 are answered failures. Retry them with a bounded sleep, not a spin.
+_BACKOFF = frozenset({"timeout", "transport", "throttle", "upstream"})
 # Opens the per-host breaker. A 500 responded; it is not a black hole.
 _BREAKER_ERRORS = frozenset({"timeout", "transport"})
 
@@ -136,6 +139,7 @@ class HopResult:
     status: int | None = None
     error: str | None = None
     body: Any = None
+    retry_after: float | None = None
 
 
 @dataclass
@@ -168,6 +172,8 @@ class FusionEvent:
 
 
 def _status_error(code: int) -> str:
+    if code == 429:
+        return "throttle"
     if code in (401, 403):
         return "auth"
     if code == 413:
@@ -231,7 +237,15 @@ def _request(
             exc.read()
         except Exception:
             pass
-        result = HopResult(ok=False, status=exc.code, error=_status_error(exc.code))
+        retry_after = None
+        if exc.code == 429 and exc.headers is not None:
+            retry_after = parse_retry_after(exc.headers.get("Retry-After"))
+        result = HopResult(
+            ok=False,
+            status=exc.code,
+            error=_status_error(exc.code),
+            retry_after=retry_after,
+        )
     except (TimeoutError, socket.timeout):
         result = HopResult(ok=False, error="timeout")
     except urllib.error.URLError as exc:
@@ -278,6 +292,10 @@ def _account(stats: dict, hop: HopResult) -> None:
         stats["missing_routes"] += 1
     elif err == "upstream":
         stats["upstream_errors"] += 1
+    elif err == "throttle":
+        stats["throttled"] += 1
+        if hop.retry_after is not None:
+            stats["_sleep_override"] = hop.retry_after
     else:
         stats["transport_errors"] += 1
 
@@ -392,15 +410,22 @@ def _event_from_post(post: dict, pid: str, cfg: RelayConfig) -> FusionEvent:
     kind = str(post.get("kind") or "finding").strip().lower()
     if kind not in BLACKBOARD_KINDS:
         kind = "finding"
-    payload = {
-        "id": pid,
-        "agent": str(post.get("agent") or "agent")[:80],
-        "role": str(post.get("role") or "")[:60],
-        "kind": kind,
-        "text": clip_text(post.get("text"), cfg.max_text_chars),
-        "refs": post.get("refs") if isinstance(post.get("refs"), list) else [],
-        "origin_node": str(post.get("origin_node") or "")[:80],
-    }
+    winner, chosen = choose_payload(post)
+    if winner == "payload":
+        # Structured payload wins over text. text is not parsed on top of it.
+        payload = chosen
+    else:
+        payload = {
+            "id": pid,
+            "agent": str(post.get("agent") or "agent")[:80],
+            "role": str(post.get("role") or "")[:60],
+            "kind": kind,
+            "text": clip_text(post.get("text"), cfg.max_text_chars),
+            "refs": post.get("refs") if isinstance(post.get("refs"), list) else [],
+            "origin_node": str(post.get("origin_node") or "")[:80],
+        }
+        if winner == "text" and "text" not in chosen:
+            payload = chosen
     ts = post.get("ts")
     when = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else 0.0
     return FusionEvent(
@@ -513,6 +538,7 @@ def _empty_stats(state_errors: int) -> dict:
         "malformed": 0,
         "missing_routes": 0,
         "upstream_errors": 0,
+        "throttled": 0,
         "transport_errors": 0,
         "backoffs": 0,
         "last_backoff_s": 0.0,
@@ -540,7 +566,7 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
     hop = _request("GET", url, timeout=cfg.timeout, token=cfg.avrone_token)
     if not hop.ok:
         _account(stats, hop)
-        return hop.error in _TRANSPORT
+        return hop.error in _BACKOFF
     if isinstance(hop.body, dict) and _note_boot(track, "avrone", _boot_value(hop.body)):
         stats["reconciled"] += 1
         # The request used the previous cursor. A restarted board treats an
@@ -568,7 +594,7 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
             new_cursor = pid
             continue
         text = clip_text(post.get("text"), cfg.max_text_chars)
-        if not text:
+        if not text and not isinstance(post.get("payload"), dict):
             stats["errors"] += 1
             stats["malformed"] += 1
             track.seen.add(pid)
@@ -576,7 +602,19 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
             track.cursor = new_cursor
             _remember(stats, cfg.state_path, track)
             continue
-        result = deliver_to_cyclekernal(_event_from_post(post, pid, cfg), cfg)
+        event = _event_from_post(post, pid, cfg)
+        try:
+            if isinstance(event.payload, dict):
+                validate_known_fields(event.payload)
+        except FieldError:
+            stats["rejected"] += 1
+            stats["errors"] += 1
+            track.seen.add(pid)
+            new_cursor = pid
+            track.cursor = new_cursor
+            _remember(stats, cfg.state_path, track)
+            continue
+        result = deliver_to_cyclekernal(event, cfg)
         if result.ok:
             _accepted(stats, result, "forwarded")
             track.seen.add(pid)
@@ -595,7 +633,7 @@ def _pull_and_forward(cfg: RelayConfig, stats: dict, track: _Track) -> bool:
         # this batch so a later post is not acked ahead of a failed one.
         track.cursor = new_cursor
         _remember(stats, cfg.state_path, track)
-        return result.error in _TRANSPORT
+        return result.error in _BACKOFF
     track.cursor = new_cursor
     _remember(stats, cfg.state_path, track)
     return False
@@ -614,7 +652,7 @@ def _mirror(
     hop = _request("GET", url, timeout=cfg.timeout, token="")
     if not hop.ok:
         _account(stats, hop)
-        return hop.error in _TRANSPORT
+        return hop.error in _BACKOFF
     if not isinstance(hop.body, dict):
         stats["errors"] += 1
         stats["malformed"] += 1
@@ -644,7 +682,7 @@ def _mirror(
         track.seen.add(eid)
         _remember(stats, cfg.state_path, track)
         return False
-    return result.error in _TRANSPORT
+    return result.error in _BACKOFF
 
 
 def relay_loop(
@@ -708,7 +746,10 @@ def relay_loop(
                     transport = True
                 _remember(stats, cfg.state_path, track)
                 if transport:
+                    override = stats.pop("_sleep_override", None)
                     delay = min(backoff, cfg.backoff_max)
+                    if isinstance(override, (int, float)):
+                        delay = min(float(override), cfg.backoff_max)
                     stats["backoffs"] += 1
                     stats["last_backoff_s"] = delay
                     backoff = min(backoff * 2, cfg.backoff_max)

@@ -1,0 +1,8 @@
+{
+  "label": "new-harness",
+  "not_original_verify_or_drill": true,
+  "original_artifacts_path_missing": true,
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+  "ipv6_loopback": true
+}

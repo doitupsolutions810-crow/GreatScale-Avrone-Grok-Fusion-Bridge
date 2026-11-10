@@ -281,7 +281,21 @@ One cycle, in order:
 
 Each cycle has a deadline (`FUSION_CYCLE_DEADLINE`, default 10s). A request uses `min(FUSION_TIMEOUT, time left in the cycle)` and a cycle will not start a call with less than 50ms left. A host that times out or refuses the connection opens a circuit after `FUSION_BREAKER_THRESHOLD` failures (default 1). Further calls to that same origin are not sent until `FUSION_BREAKER_COOLDOWN` (default 30s); then one probe is allowed. A 500 is not a black hole and does not open the circuit. This is what stops a CycleKernal that accepts the TCP connection and never answers from costing a full timeout per queued event (a live run paid about 15s per event, 215s for 21 events).
 
-An id is remembered only after a 2xx, or after a permanent 4xx (400, 413, other non-auth 4xx). Timeouts, connection failures, 401/403, 404/405, and 5xx leave the id unseen so a later cycle retries it. A transport failure backs off from `FUSION_BACKOFF_BASE` (default 0.5s), doubling to `FUSION_BACKOFF_MAX` (default 8s), and the multiplier resets after a cycle with no transport failure. 404 and 500 do not use that backoff; they wait for `FUSION_INTERVAL`.
+An id is remembered only after a 2xx, or after a permanent 4xx (400, 413, other non-auth 4xx except 429). Timeouts, connection failures, 401/403, 404/405, 429, and 5xx leave the id unseen so a later cycle retries it. Timeouts and connection failures back off from `FUSION_BACKOFF_BASE` (default 0.5s), doubling to `FUSION_BACKOFF_MAX` (default 8s). A 429 uses a valid `Retry-After` delta-seconds value when it is between 0 and 30 inclusive; words, signs, HTTP-dates, and larger numbers are ignored and the computed backoff is used instead. A 500 uses that same bounded backoff. Neither is a busy spin, and neither opens the black-hole circuit. 404 does not use that backoff; it waits for `FUSION_INTERVAL`.
+
+## Payload field syntax
+
+Optional keys `heat`, `cone_angle`, and `beta_t` are syntax checks only. They do not validate the Bernoulli identity heat(h) = h(1-h) from avrone-daemon, and they are not a physical result.
+
+| Field | Accepted | Rejected |
+| --- | --- | --- |
+| `heat` | finite JSON number. A non-zero token that underflows to IEEE-754 0.0 (wire `1e-400`) is stored as 0.0 and the literal token is kept. | boolean, string, list, object, non-finite |
+| `cone_angle` | finite JSON number | any string, including base64, `""`, and strings that would parse only after stripping whitespace or comments |
+| `beta_t` | finite number, or a string without Cc/Cf/Cs characters. Emoji is kept. | zero-width and other format characters; a string that is itself a JSON object or array |
+
+If both a structured `payload` object and `text` are present and the HTTP body is within 4096 bytes, `payload` wins and `text` is not parsed over it. A body over 4096 bytes is 413 before that choice. The event log keeps the first write for an id; later posts with the same id are explicit duplicates.
+
+`AVRONE_URL` is used only when `AVRONE_BASE` is unset. An IPv6 literal must be bracketed (`http://[::1]:8710`).
 
 `GET /health` (and Avrone `GET /api/status`, and `GET /api/blackboard`) include `boot`: a string or integer epoch that stays constant until that process restarts and changes when it does. The first value the relay sees is recorded and does not cause a resend. A later change means that peer lost its memory: the relay forgets ids it delivered **to that peer** and sends them again. CycleKernal's boot clears forwarded Avrone entry ids (mood and health mirror ids stay). Avrone's boot clears `ck-mood-` / `ck-health-` / `ck-evidence-` ids (forwarded findings stay). A missing `boot` leaves the saved state alone, so an older peer does not look like a restart on every poll.
 

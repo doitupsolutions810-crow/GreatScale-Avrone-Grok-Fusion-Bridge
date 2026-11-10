@@ -1,0 +1,12 @@
+label=new-harness
+not_the_missing_original=true
+original_verify_sh=absent
+original_drill_py=absent
+original_artifacts_fusion_bridge=absent
+2026-11-10T04:27:15Z
+docker=down
+verification_mode=host-only
+pytest_excluding_500_case=49 passed (this session, -k 'not two_second')
+pytest_500_case=passed earlier this session (not re-run)
+soak_60s=passed this session via python3 drill.py --soak-seconds 60
+verify_sh_full_rerun=not executed, to avoid repeating the 20s and 60s runs

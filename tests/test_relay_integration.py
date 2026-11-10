@@ -224,7 +224,7 @@ def test_upstream_500_does_not_ack_and_later_succeeds(peers):
     assert failed["forwarded"] == 0
     assert failed["upstream_errors"] >= 1
     assert failed["mood_mirrored"] == 1
-    assert failed["backoffs"] == 0
+    assert failed["backoffs"] == 1
     assert ck.log.list() == []
     ck.fail.clear()
     recovered = relay_loop(interval=0, max_cycles=1)
